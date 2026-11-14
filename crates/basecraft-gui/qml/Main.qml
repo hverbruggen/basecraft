@@ -76,7 +76,7 @@ ApplicationWindow {
     palette.highlightedText: shell.background
 
     // Theme, font and project folder, whether or not a file is open.
-    GenomeController { id: shell; objectName: "shell" }
+    readonly property GenomeController shell: GenomeController { objectName: "shell" }
 
     readonly property var ribbonNavigation: ribbonHints
     RibbonKeyHints {
@@ -91,7 +91,7 @@ ApplicationWindow {
     // Open files, one tab each: the rows of documentOpens.
     function documentAt(index) {
         if (index < 0 || index >= documentOpens.count) return null
-        const slot = docs.itemAt(index)
+        const slot = documentArea.docs.itemAt(index)
         return slot && slot.adoptedSlot === true ? (slot.ready ? slot.documentView : null) : slot
     }
     // Consent belongs to a tab lifetime and owner, never its shifting row.
@@ -113,11 +113,10 @@ ApplicationWindow {
     property bool applyingOpenFocus: false
     onActiveFocusItemChanged: if (!applyingOpenFocus) documentOpens.revoke_focus()
     Component.onDestruction: documentOpens.shutdown()
-    DocumentOpens {
-        id: documentOpens
+    readonly property DocumentOpens documentOpens: DocumentOpens {
         onAcquired: (token, kind) => {
             const index = documentOpens.index_of(token)
-            const slot = index >= 0 ? docs.itemAt(index) : null
+            const slot = index >= 0 ? documentArea.docs.itemAt(index) : null
             if (slot && slot.adoptedSlot === true) slot.construct(kind)
             else documentOpens.retire(token)
         }
@@ -204,8 +203,7 @@ ApplicationWindow {
         if (chosen.length) quitStep(JSON.parse(documentOpens.switch_project(chosen, shell.project_dir, then)))
     }
     property bool preferencesReady: false
-    AppSettings {
-        id: preferences
+    readonly property AppSettings preferences: AppSettings {
         objectName: "preferences"
         onSnapshotChanged: if (window.preferencesReady) window.loadPreferences()
         onRelease_available: notice => provenance.notification("", notice, "notify")
@@ -216,25 +214,7 @@ ApplicationWindow {
     function persistPreference(key, value) {
         if (preferencesReady) preferences.update(key, JSON.stringify(value))
     }
-    OnDemand { id: preferencesError; objectName: "preferencesError"; sourceComponent: Component { AppContentDialog {
-        id: preferencesErrorItem
-        title: "Preferences could not be loaded or saved"
-        standardButtons: Dialog.Close
-        body: ColumnLayout {
-            AppErrorLabel {
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                text: preferences.error + "\n\nThe original preferences are retained. If loading failed, changes in this session remain temporary. Correct the preferences file or storage problem, then retry."
-            }
-            AppButton {
-                text: "Retry loading preferences"
-                onClicked: {
-                    window.loadPreferences()
-                    if (!preferences.error.length) preferencesErrorItem.close()
-                }
-            }
-        }
-    } } }
+    OnDemand { id: preferencesError; objectName: "preferencesError"; sourceComponent: Component { PreferencesErrorDialog { app: window } } }
     function loadPreferences() {
         preferencesReady = false
         if (!preferences.reload()) return
@@ -313,7 +293,7 @@ ApplicationWindow {
     OnDemand { id: textRepresentation; objectName: "textRepresentation"; sourceComponent: Component { TextRepresentationDialog { id: textRepresentationItem } } }
 
     function focusRegion(backward) {
-        const regions = [ribbonTabBar, tree, tabs, delimitationOpen ? window.documentAt(tabs.currentIndex) : currentView].filter(item => item && item.visible && item.enabled)
+        const regions = [ribbonTabBar, documentArea.fileTree, tabs, delimitationOpen ? window.documentAt(tabs.currentIndex) : currentView].filter(item => item && item.visible && item.enabled)
         if (!regions.length) return
         let active = -1
         for (let i = 0; i < regions.length; ++i) {
@@ -466,7 +446,7 @@ ApplicationWindow {
         function onLabel_questionChanged() { labelPlacement.dialog().controller = window.current }
         function onRefused_editChanged() { readOnlyCopy.dialog().owner = window.current }
         function onTaxaSelected(names) {
-            for (let i = 0; i < docs.count; i++) {
+            for (let i = 0; i < documentArea.docs.count; i++) {
                 const d = window.documentAt(i)
                 if (d) documentOpens.link_taxa(window.current, d.controller, names)
             }
@@ -517,28 +497,7 @@ ApplicationWindow {
         onTriggered: editor.openNew()
     }
     property var pendingSequence: null
-    OnDemand { id: newSequenceDialog; sourceComponent: Component { AddSequenceDialog {
-        id: newSequenceDialogItem
-        controller: shell
-        newDocument: true
-        onInputError: message => validationMessage = message
-        onRejected: {
-            const pending = window.pendingSequence
-            window.pendingSequence = null
-            if (!pending) return
-            const pendingIndex = documentOpens.index_of(pending.token)
-            if (pendingIndex >= 0) window.removeDocument(pendingIndex)
-            tabs.currentIndex = pending.previous
-        }
-        onCreateRequested: (name, sequence) => {
-            if (window.pendingSequence) return
-            const error = shell.new_sequence_error(name, sequence)
-            if (error.length) { validationMessage = error; return }
-            const index = documentOpens.new_sequence(name)
-            window.pendingSequence = {path: documentOpens.path_at(index), name: name, sequence: sequence, previous: tabs.currentIndex, token: documentOpens.token_at(index)}
-            tabs.currentIndex = index
-        }
-    } } }
+    OnDemand { id: newSequenceDialog; sourceComponent: Component { NewSequenceDialog { app: window } } }
     function initializeSequence(document) {
         const pending = window.pendingSequence
         if (!pending || pending.path !== document.path) return
@@ -645,8 +604,7 @@ ApplicationWindow {
         enabled: window.current !== null
         onTriggered: window.exportSvg("png")
     }
-    AppProvenance {
-        id: provenance
+    readonly property AppProvenance provenance: AppProvenance {
         onMessageChanged: if (message.length && message !== "notify: Working…") notification("", message, message.startsWith("fail:") ? "fail" : "done")
     }
     AppJobs { id: jobService }
@@ -744,32 +702,7 @@ ApplicationWindow {
             recoveryPicker.dialog().open()
         }
     }
-    OnDemand { id: recoveryPicker; sourceComponent: Component { AppFormDialog {
-        id: recoveryPickerItem
-        title: "Recover unsaved work"
-        standardButtons: Dialog.Close
-        property var sessions: []
-        initialFocusItem: recoveryChoice
-        Label { text: "Recovery creates copies in a new directory using the unchanged original or a retained recovery file. Originals and journals are preserved."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        Label { visible: !recoveryPickerItem.sessions.length; text: provenance.message.startsWith("fail:") ? provenance.message : "No recovery sessions are available."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        AppComboBox {
-            id: recoveryChoice
-            Kirigami.FormData.label: "Session:"
-            Layout.fillWidth: true
-            model: recoveryPickerItem.sessions.map(session => session.name + " — " + session.id)
-            enabled: model.length > 0
-        }
-        AppButton {
-            text: "Choose recovery destination…"
-            enabled: recoveryChoice.currentIndex >= 0 && recoveryPickerItem.sessions.length > 0
-            onClicked: {
-                window.provenanceSource = recoveryPickerItem.sessions[recoveryChoice.currentIndex].path
-                window.provenanceExport = "recover"
-                recoveryPickerItem.close()
-                provenanceFolder.dialog().open()
-            }
-        }
-    } } }
+    OnDemand { id: recoveryPicker; sourceComponent: Component { RecoveryPickerDialog { app: window; destinationFolder: provenanceFolder } } }
 
     OnDemand { id: provenanceFolder; sourceComponent: Component { FolderDialog {
         id: provenanceFolderItem
@@ -783,101 +716,24 @@ ApplicationWindow {
         }
     } } }
 
-    OnDemand { id: provenanceDialog; sourceComponent: Component { AppDialog {
-        id: provenanceDialogItem
-        title: window.provenanceExport === "recover" ? "Recovered work" : "Saved files and exports"
-        implicitWidth: 860
-        implicitHeight: 600
-        standardButtons: Dialog.Close
-        initialFocusItem: provenanceText
-        contentItem: ColumnLayout {
-            Label { visible: window.provenanceExport !== "recover"; text: "File verification and reproduction packages describe saved files. Report exports retain the selected document revision."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            AppMessageBar {
-                Layout.fillWidth: true
-                busy: provenance.busy
-                workingText: provenance.message || "Working on provenance"
-                message: provenance.message
-                cancellable: false
-            }
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                TextArea { id: provenanceText; text: provenance.text; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; Accessible.name: "Recorded provenance and verification results" }
-            }
-        }
-    } } }
+    OnDemand { id: provenanceDialog; sourceComponent: Component { ProvenanceDialog { app: window } } }
     OnDemand { id: preferencesWindow; sourceComponent: Component { PreferencesDialog { id: preferencesDialog; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints; onContactDetailsRequested: window.showContacts() } } }
 
     // The one list of commands: keys, scopes, icons and why one is unavailable.
-    AppCommands { id: commandList }
+    readonly property AppCommands commandList: AppCommands {}
+    function commandFor(id) { return applicationCommands.find(command => command.commandId === id) || null }
     readonly property string commandContext: JSON.stringify({project: shell.project_dir.length > 0, document: current !== null,
         path: currentPath.length > 0, kind: currentKind, busy: !!current && !!current.busy, calling: !!current && !!current.calling,
         linked_alignment: !!current && !!current.linked_alignment, species_view: speciesView !== null, records_busy: provenance.busy,
         submission_busy: submissionJobs.busy, trace_working: traceOpen && !!traceDocument && traceDocument.working,
         review_mode: !!current && !!current.review_mode, unresolved: !!current && current.unresolved > 0})
     component Command: AppCommand {
-        text: commandList.caption(commandId)
-        tooltip: commandList.tip(commandId)
+        text: window.commandList.caption(commandId)
+        tooltip: window.commandList.tip(commandId)
         customization: window.customization
-        disabledReason: commandList.disabled_reason(commandId, window.commandContext)
-        hintScope: commandList.scope(commandId)
-        defaultKeyHint: commandList.key(commandId)
-    }
-    component RibbonButton: AppCommandButton {
-        text: commandList.caption(commandId)
-        tip: commandList.tip(commandId)
-        customization: window.customization
-        disabledReason: commandList.disabled_reason(commandId, window.commandContext)
-        hintScope: commandList.scope(commandId)
-        defaultKeyHint: commandList.key(commandId)
-        enabled: window.current !== null
-        iconName: commandList.icon(commandId)
-        Component.onCompleted: window.registerRibbonCommand(commandAction)
-    }
-    // The same last group on every ribbon tab.
-    // A ribbon button that shows whether its mode is on.
-    component ExportConsensusButton: RibbonButton {
-        id: consensusExportButton
-        // The FASTA motif fits the shared compact symbol band.
-        symbolSize: 16
-        Accessible.name: tip
-        background: Rectangle {
-            radius: 3
-            color: Qt.alpha(shell.foreground, consensusExportButton.pressed ? 0.14 : consensusExportButton.hovered ? 0.10 : 0.05)
-            border.color: Qt.alpha(shell.foreground, 0.18)
-        }
-    }
-    component ModeButton: RibbonButton {
-        id: modeButton
-        property bool active
-        background: Rectangle {
-            radius: 3
-            color: modeButton.active ? Qt.alpha(shell.accent, 0.18)
-                : modeButton.hovered ? Qt.alpha(shell.foreground, 0.05) : "transparent"
-            border.color: modeButton.active || modeButton.visualFocus ? shell.accent : "transparent"
-        }
-    }
-    component SpeciesMethodsGroup: RibbonGroup {
-        id: speciesMethods
-        required property string commandSuffix
-        title: "Species delimitation"
-        readonly property bool canRun: (window.alignmentOpen || window.treeOpen || window.delimitationOpen) && window.current !== null && !window.current.busy
-        RibbonButton { commandId: "species.gmyc-" + speciesMethods.commandSuffix; iconName: "tree-gmyc"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("gmyc") }
-        RibbonButton { commandId: "species.asap-" + speciesMethods.commandSuffix; iconName: "matrix-asap"; enabled: (window.alignmentOpen || (window.delimitationOpen && window.current && window.current.linked_alignment.length > 0)) && speciesMethods.canRun; onInvoked: window.beginDelimitation("asap") }
-        RibbonButton { commandId: "species.ptp-" + speciesMethods.commandSuffix; iconName: "phylogram-ptp"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("ptp") }
-        RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; iconName: "hypothesis-manual"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("manual") }
-        RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; iconName: "hypothesis-combine"; onInvoked: combinePicker.dialog().open() }
-    }
-    component HelpGroup: RibbonHelpGroup {
-        methodsAction: methodsCommand
-        shortcutsAction: contextShortcutsCommand
-        aboutAction: aboutCommand
-        learnAction: learnCommand
-        preferencesAction: preferencesCommand
-        exportSvgAction: exportSvgCommand
-        exportPngAction: exportPngCommand
-        backgroundColor: shell.background
+        disabledReason: window.commandList.disabled_reason(commandId, window.commandContext)
+        hintScope: window.commandList.scope(commandId)
+        defaultKeyHint: window.commandList.key(commandId)
     }
     header: ColumnLayout {
         spacing: 0
@@ -970,551 +826,33 @@ ApplicationWindow {
             currentIndex: commandList.ribbon_panel(window.ribbonTab)
             background: Rectangle { color: Qt.alpha(shell.foreground, 0.025) }
 
-                RibbonPage {
-                    spacing: 6 * window.ribbonSizeFactor
-                    RibbonGroup {
-                        title: "Project"
-                        AppRibbonButton { action: projectCommand; visible: projectCommand.visible; text: commandList.ribbon_label(projectCommand.commandId); iconName: "project"; tip: projectCommand.effectiveTooltip }
-                        AppRibbonButton {
-                            id: recentProjectButton
-                            property string keyHint: "RC"
-                            text: "Recent"
-                            iconName: "project"
-                            tip: "Open a recent project"
-                            Accessible.role: Accessible.ButtonMenu
-                            onClicked: recentProjectMenu.popup(recentProjectButton, 0, height)
-                            RibbonMenu {
-                                id: recentProjectMenu
-                                objectName: "recentProjectMenu"
-                                sizeFactor: window.ribbonSizeFactor
-                                RibbonMenuItem { sizeFactor: window.ribbonSizeFactor; text: "No recent projects"; enabled: false; visible: preferences.recent_projects.length === 0 }
-                                Repeater {
-                                    model: preferences.recent_projects
-                                    RibbonMenuItem { sizeFactor: window.ribbonSizeFactor;
-                                        required property string modelData
-                                        text: window.fileName(modelData)
-                                        ToolTip.text: modelData
-                                        ToolTip.visible: hovered
-                                        onTriggered: window.selectProject(modelData)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "File"
-                        AppRibbonButton { action: newSequenceCommand; visible: newSequenceCommand.visible; iconName: "new-file"; tip: newSequenceCommand.effectiveTooltip }
-                        AppRibbonButton { action: saveCommand; visible: saveCommand.visible; iconName: "save"; tip: saveCommand.effectiveTooltip }
-                        AppRibbonButton { action: saveAsCommand; visible: saveAsCommand.visible; iconName: "save-as"; tip: saveAsCommand.effectiveTooltip }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Species workspaces"
-                        RibbonButton { commandId: "species.combine-project"; iconName: "hypothesis-combine"; enabled: true; onInvoked: combinePicker.dialog().open() }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Recovery"
-                        AppRibbonButton { action: recoverCommand; visible: recoverCommand.visible; iconName: "history"; tip: recoverCommand.effectiveTooltip }
-                    }
-                    Item { Layout.fillWidth: true }
-                    HelpGroup {}
-                }
-
-                RibbonPage {
-                    spacing: 6 * window.ribbonSizeFactor
-                    RibbonGroup {
-                        title: "Zoom"
-                        disabledReason: window.delimitationOpen ? "Attach a display tree to the species workspace to zoom it" : "Open a document to zoom its view"
-                        enabled: (window.delimitationOpen ? window.speciesTree : window.current) !== null
-                        RibbonButton { commandId: "ribbon.zoom-out"; iconName: "zoom-out"; keys: "Ctrl+−"; onInvoked: (window.delimitationOpen ? window.speciesTree : window.current).zoom_out() }
-                        RibbonButton { commandId: "ribbon.zoom-in"; iconName: "zoom-in"; keys: "Ctrl++"; onInvoked: (window.delimitationOpen ? window.speciesTree : window.current).zoom_in() }
-                        RibbonButton { commandId: "ribbon.fit";
-                            text: "Fit"
-                            iconName: "fit"
-                            tip: window.alignmentOpen ? "Show the whole width of the alignment" : window.treeOpen ? "Show the whole tree" : "Show the whole sequence"
-                            keys: "Ctrl+0"
-                            onInvoked: (window.delimitationOpen ? window.speciesTree : window.current).fit()
-                        }
-                        RibbonButton { commandId: "ribbon.zoom-to-the-selection"; text: "Selection"; iconName: "selection"; enabled: window.current !== null && (window.currentKind === "sequence" || window.alignmentOpen); tip: "Zoom to the selection"; onInvoked: window.current.zoom_to_selection() }
-                        RibbonNumberField {
-                            objectName: "zoomPercentage"
-                            label: "%"
-                            tip: "Zoom percentage"
-                            disabledReason: window.delimitationOpen ? "Attach a display tree to zoom it" : "Open a document to change its zoom"
-                            readonly property var controller: window.delimitationOpen ? window.speciesTree : window.current
-                            from: 0; to: 20000
-                            value: controller ? parseFloat(controller.zoom_text) : 100
-                            fractional: true
-                            enabled: controller !== null
-                            onEdited: value => { if (controller) controller.set_zoom_percent(value) }
-                        }
-                    }
-                    ToolSeparator { Layout.fillHeight: true; enabled: window.currentKind === "sequence" }
-                    // Linear and circular layouts exist in the code but are
-                    // not offered for now; the wrapped layout is the view.
-                    RibbonGroup {
-                        title: "Show"
-                        AppCheckBox {
-                            property string keyHint: "V"
-                            text: "Overview"
-                            checked: window.overviewEnabled
-                            enabled: window.current !== null
-                            HoverHandler { id: overviewTipHover }
-                            Accessible.description: ToolTip.text
-                            ToolTip.text: enabled ? "Show a compact navigator when the document extends beyond the view" : "Open a document to show its overview"
-                            ToolTip.visible: overviewTipHover.hovered || activeFocus
-                            onToggled: window.overviewEnabled = checked
-                        }
-                        AppCheckBox {
-                            property string keyHint: "GC"
-                            text: "GC content"
-                            enabled: window.currentKind === "sequence"
-                            HoverHandler { id: gcTipHover }
-                            Accessible.description: ToolTip.text
-                            ToolTip.text: enabled ? "Show the GC content plot" : "Open a sequence to show its GC content plot"
-                            ToolTip.visible: gcTipHover.hovered || activeFocus
-                            ToolTip.delay: 400
-                            checked: window.showGc
-                            focusPolicy: Qt.StrongFocus
-                            onToggled: window.showGc = checked
-                        }
-                        AppCheckBox {
-                            objectName: "colorBlindFriendly"
-                            property string keyHint: "CB"
-                            text: "Colour-blind colours"
-                            HoverHandler { id: paletteTipHover }
-                            Accessible.description: ToolTip.text
-                            ToolTip.text: "Data colours that stay distinct for colour-blind readers, in the light or dark variant of the appearance. Labels still identify the data."
-                            ToolTip.visible: paletteTipHover.hovered || activeFocus
-                            ToolTip.delay: 400
-                            checked: !!window.preferenceValues.ui && window.preferenceValues.ui.data_color_scheme === "color-blind-friendly"
-                            focusPolicy: Qt.StrongFocus
-                            onToggled: window.persistPreference("colorBlindFriendly", checked)
-                        }
-                    }
-                    Item { Layout.fillWidth: true }
-                    RibbonGroup { title: "Find and text"; actions: [findCommand, textRepresentationCommand] }
-                    HelpGroup {}
-                }
-
-                RibbonPage {
-                    spacing: 6 * window.ribbonSizeFactor
-                    RibbonGroup {
-                        disabledReason: "Open a sequence to use this group"
-                        enabled: window.currentKind === "sequence"
-                        title: "Annotation"
-                        AppRibbonButton { action: addAnnotationCommand; text: commandList.ribbon_label(addAnnotationCommand.commandId); visible: addAnnotationCommand.visible; iconName: "annotation-add"; tip: addAnnotationCommand.effectiveTooltip }
-                        RibbonButton { commandId: "ribbon.edit-the-selected-annotation"; iconName: "annotation-edit"; keys: "Enter"; onInvoked: editor.openSelected() }
-                        RibbonButton { commandId: "ribbon.delete-the-selected-annotation";
-                            iconName: "annotation-delete"
-                            keys: "Delete"
-                            onInvoked: {
-                                const id = window.current.selected_feature()
-                                if (id >= 0) window.current.delete_feature(id)
-                                else { window.current.message_kind = ""; window.current.message = "Click an annotation first" }
-                            }
-                        }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        disabledReason: "Open a sequence to use this group"
-                        enabled: window.currentKind === "sequence"
-                        title: "Go to"
-                        RibbonButton { commandId: "ribbon.select-the-previous-annotation"; iconName: "left"; onInvoked: window.current.step_feature(false) }
-                        RibbonButton { commandId: "ribbon.select-the-next-annotation"; iconName: "right"; onInvoked: window.current.step_feature(true) }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        disabledReason: "Open a sequence to use this group"
-                        enabled: window.currentKind === "sequence"
-                        title: "Sequence"
-                        RibbonButton { commandId: "ribbon.copy-the-selected-annotation-s-sequence";
-                            text: "Copy"
-                            tip: "Copy the selected annotation's sequence"
-                            keys: "Ctrl+C"
-                            onInvoked: {
-                                const id = window.current.selected_feature()
-                                if (id >= 0) clipboard.put(window.current.feature_sequence(id))
-                                else { window.current.message_kind = ""; window.current.message = "Click an annotation first" }
-                            }
-                        }
-                        RibbonButton { commandId: "ribbon.save-the-selection-as-a-new-file"; text: "Extract"; tip: "Save the selection as a new file"; keys: "Ctrl+E"; onInvoked: window.current.extract_selection() }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        disabledReason: "Open a sequence to use this group"
-                        enabled: window.currentKind === "sequence"
-                        title: "Find"
-                        RibbonButton { commandId: "sequence.blast"; iconName: "search"; onInvoked: window.beginBlast("whole") }
-                        RibbonButton { commandId: "ribbon.annotate-open-reading-frames";
-                            text: "ORFs"
-                            tip: "Annotate open reading frames"
-                            enabled: window.current && !window.current.busy
-                            onInvoked: orfDialog.dialog().search(false)
-                        }
-                        RibbonButton { commandId: "ribbon.annotate-protein-coding-genes-with-prodigal";
-                            text: "Prodigal"
-                            tip: "Annotate protein-coding genes with Prodigal"
-                            enabled: window.current && !window.current.busy
-                            onInvoked: genesDialog.dialog().predict(false)
-                        }
-                    }
-                    Item { Layout.fillWidth: true }
-                    HelpGroup {}
-                }
-
-                // Alignment: edits on the selected block, its columns and rows.
-                RibbonPage {
-                    spacing: 6 * window.ribbonSizeFactor
-                    RibbonGroup {
-                        disabledReason: "Open an alignment to use this group"
-                        enabled: window.alignmentOpen
-                        title: "Editing mode"
-                        ModeButton { commandId: "ribbon.insert-typing-inserts-bases-the-rest-of-the-row";
-                            iconName: "add"
-                            text: "Insert"
-                            active: window.alignmentInsert
-                            tip: "Insert: typing inserts bases; the rest of the row moves right"
-                            keys: "Insert"
-                            onInvoked: window.alignmentInsert = true
-                        }
-                        ModeButton { commandId: "ribbon.overwrite-typing-replaces-the-selected-bases";
-                            iconName: "edit"
-                            text: "Overwrite"
-                            active: !window.alignmentInsert
-                            tip: "Overwrite: typing replaces the selected bases"
-                            keys: "Insert"
-                            onInvoked: window.alignmentInsert = false
-                        }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        disabledReason: "Open an alignment to use this group"
-                        enabled: window.alignmentOpen
-                        title: "Columns"
-                        RibbonButton { commandId: "ribbon.delete-columns-containing-only-gaps-across-all-rows-including";
-                            iconName: "columns"
-                            text: "Delete empty"
-                            badge: window.current && window.current.gap_column_count >= 0 ? String(window.current.gap_column_count) : "…"
-                            enabled: window.current !== null && window.current.gap_column_count > 0
-                            tip: "Delete columns containing only gaps across all rows, including hidden rows"
-                            onInvoked: window.current.remove_gap_columns()
-                        }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        disabledReason: "Open an alignment to use this group"
-                        enabled: window.alignmentOpen
-                        title: "Rows"
-                        RibbonButton { commandId: "ribbon.move-the-selected-rows-up"; iconName: "up"; keys: "Alt+↑"; onInvoked: window.current.move_rows(true) }
-                        RibbonButton { commandId: "ribbon.move-the-selected-rows-down"; iconName: "down"; keys: "Alt+↓"; onInvoked: window.current.move_rows(false) }
-                        RibbonButton { commandId: "ribbon.rename-the-cursor-s-row"; Accessible.name: tip; keys: "F2"; onInvoked: renameDialog.dialog().askRow() }
-                        RibbonButton { commandId: "ribbon.delete-the-selected-rows"; iconName: "delete"; onInvoked: window.current.remove_rows() }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        disabledReason: "Open an alignment to use this group"
-                        enabled: window.alignmentOpen
-                        title: "Find"
-                        RibbonButton { commandId: "alignment.blast"; iconName: "search"; onInvoked: window.beginBlast("all") }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        disabledReason: "Open an alignment to use this group"
-                        enabled: window.alignmentOpen
-                        title: "Align"
-                        RibbonButton { commandId: "ribbon.realign-the-sequences-with-mafft-default-settings-into-a";
-                            iconName: "align"
-                            text: window.current && window.current.busy ? "Aligning" : "MAFFT"
-                            enabled: window.current !== null && !window.current.busy
-                            tip: "Realign the sequences with MAFFT, default settings, into a new file"
-                            onInvoked: window.current.align_mafft()
-                        }
-                        RibbonButton { commandId: "ribbon.trim-unreliable-columns-with-trimal-automated1-into-a-new";
-                            iconName: "trim"
-                            text: "trimAL"
-                            enabled: window.current !== null && !window.current.busy
-                            tip: "Trim unreliable columns with trimAl automated1 into a new alignment"
-                            onInvoked: window.current.trim_alignment()
-                        }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        disabledReason: "Open an alignment to use this group"
-                        enabled: window.alignmentOpen
-                        title: "Add sequence"
-                        RibbonButton { commandId: "ribbon.type-a-new-sequence-or-paste-fasta"; iconName: "new-file"; enabled: window.current !== null && !window.current.busy; onInvoked: window.documentAt(tabs.currentIndex).addText() }
-                        RibbonButton { commandId: "ribbon.add-all-sequences-from-a-fasta-file"; iconName: "add-file"; enabled: window.current !== null && !window.current.busy; onInvoked: window.documentAt(tabs.currentIndex).addFasta() }
-                        RibbonButton { commandId: "ribbon.review-chromatograms-and-add-their-consensus"; iconName: "waveform"; enabled: window.current !== null && !window.current.busy; onInvoked: window.documentAt(tabs.currentIndex).addTraces() }
-                    }
-                    Item { Layout.fillWidth: true }
-                    HelpGroup {}
-                }
-
-                // Tree: the selected clade, the order of clades, support
-                // values and figures.
-                RibbonPage {
-                    spacing: 6 * window.ribbonSizeFactor
-                    TreeRootingGroup {
-                        controller: window.treeOpen ? window.current : null
-                        captions: commandList
-                        treeOpen: window.treeOpen
-                        customization: window.customization
-                        Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        disabledReason: "Open a tree to use this group"
-                        enabled: window.treeOpen
-                        title: "Clock"
-                        RibbonButton {
-                            commandId: "tree.rate-smoothing"
-                            iconName: "tree-clock"
-                            enabled: window.treeOpen && window.current !== null && window.currentPath.length > 0
-                            onInvoked: operationWindow.dialog().showOperation(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty, "basecraft.sanderson/date_tree@1")
-                        }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    TreeCladeGroup {
-                        controller: window.treeOpen ? window.current : null
-                        captions: commandList
-                        customization: window.customization
-                        onAnnotateRequested: cladeEditor.openSelected()
-                        Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    TreeStyleGroup {
-                        controller: window.treeOpen ? window.current : null
-                        customization: window.customization
-                        onExtraRequested: treeStyle.dialog().openStyle("extra")
-                        onLabelsRequested: metadataTipLabels.dialog().show(window.current, window.currentPath)
-                        Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    // Support values: everything but Add is greyed while the tree has none.
-                    RibbonGroup {
-                        disabledReason: "Open a tree to use this group"
-                        enabled: window.treeOpen
-                        id: supportGroup
-                        title: "Support"
-                        readonly property bool hasSupport: window.treeOpen && window.current !== null && window.current.has_support === true
-                        RibbonButton { commandId: "ribbon.add-support-values-from-another-analysis-of-the-same"; onInvoked: supportFile.dialog().open() }
-                        RibbonNumberField {
-                            objectName: "supportFont"
-                            label: "Size"
-                            tip: "Support value size in pixels"
-                            disabledReason: window.treeOpen ? "Use Support > Add to add tree support values before resizing them" : "Open a tree to resize support values"
-                            from: 6; to: 30
-                            value: window.treeOpen && window.current ? window.current.support_font : 10
-                            enabled: supportGroup.hasSupport
-                            onEdited: value => window.current.set_sizes(0, value, 0)
-                        }
-                        RibbonButton { commandId: "ribbon.which-support-values-show-circles-at-nodes-sizes"; iconName: "support-style"; enabled: supportGroup.hasSupport; onInvoked: treeStyle.dialog().openStyle("support") }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    TreeAlignmentGroup {
-                        controller: window.treeOpen ? window.current : null
-                        captions: commandList
-                        customization: window.customization
-                        onLinkRequested: (target) => linkAlignmentFile.dialog().ask(target)
-                        Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
-                    }
-                    Item { Layout.fillWidth: true }
-                    HelpGroup {}
-                }
-
-                // Phylogeny: tree inference from the open alignment.
-                RibbonPage {
-                    spacing: 6 * window.ribbonSizeFactor
-                    RibbonGroup {
-                        disabledReason: "Open an alignment to use this group"
-                        enabled: window.alignmentOpen
-                        title: "Distance tree"
-                        Repeater {
-                            model: [{label: "Matrix", value: "matrix"}, {label: "NJ", value: "nj"}, {label: "UPGMA", value: "upgma"}]
-                            delegate: RibbonButton { commandId: "analysis.distance." + modelData.value;
-                                required property var modelData
-                                iconName: modelData.value === "matrix" ? "matrix" : modelData.value === "nj" ? "phylogram" : "tree"
-                                text: modelData.label
-                                enabled: window.current !== null && !window.current.busy
-                                tip: modelData.value === "matrix" ? "Save observed distances as TSV and a reusable cache" : modelData.value === "upgma" ? "Build a rooted, equal-rate UPGMA tree" : "Build a neighbor-joining tree"
-                                onInvoked: toolSettings.dialog().show(window.current, "distance", modelData.value)
-                            }
-                        }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        disabledReason: "Open an alignment to use this group"
-                        enabled: window.alignmentOpen
-                        title: "Maximum likelihood"
-                        RibbonButton { commandId: "ribbon.infer-a-tree-with-fasttree-standard-settings-gtr-for";
-                            iconName: "tree-fast"
-                            text: window.current && window.current.busy ? "Running" : "FastTree"
-                            enabled: window.current !== null && !window.current.busy
-                            tip: "Infer a tree with FastTree: choose the model, rate variation and support values"
-                            onInvoked: toolSettings.dialog().show(window.current, "fasttree", "tree")
-                        }
-                        RibbonButton { commandId: "ribbon.select-a-model-and-infer-a-maximum-likelihood-tree";
-                            iconName: "tree-infer"
-                            text: "IQ-TREE"
-                            enabled: window.current !== null && !window.current.busy
-                            tip: "Infer a maximum-likelihood tree: choose the model, rate variation and branch support"
-                            onInvoked: toolSettings.dialog().show(window.current, "iqtree", "tree")
-                        }
-                    }
-                    Item { Layout.fillWidth: true }
-                    HelpGroup {}
-                }
-                RibbonPage {
-                    SpeciesMethodsGroup { commandSuffix: "workspace" }
-                    RibbonGroup {
-                        title: "Specimens"
-                        RibbonButton { commandId: "species.roster-links"; iconName: "matrix"; enabled: window.speciesView !== null && specimenMetadata.available; onInvoked: rosterConsumer.dialog().show(window.current, window.currentPath) }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Display"
-                        ModeButton { commandId: "species.tree-view"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; active: window.speciesView !== null && !window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = false }
-                        ModeButton { commandId: "species.text-view"; iconName: "text-representation"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = true }
-                        RibbonButton { commandId: "species.layout"; iconName: "bar-layout"; enabled: window.speciesView !== null && window.speciesView.columnInfo.columns.length > 0; onInvoked: window.speciesView.layoutBars() }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    // The same tree style controls as the tree page, for the
-                    // display tree; they change only how it is drawn here.
-                    TreeStyleGroup {
-                        scope: "species"
-                        controller: window.speciesTree
-                        customization: window.customization
-                        onExtraRequested: treeStyle.dialog().openStyle("extra")
-                        Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
-                        RibbonButton { commandId: "species.support-style"; iconName: "support-style"; enabled: window.speciesTree !== null && window.speciesTree.has_support; onInvoked: treeStyle.dialog().openStyle("support") }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Hypotheses"
-                        RibbonButton { commandId: "species.new"; iconName: "add"; enabled: window.speciesView !== null && !window.current.busy; onInvoked: window.speciesView.newHypothesis() }
-                        RibbonButton { commandId: "species.columns"; iconName: "columns"; enabled: window.speciesView !== null; onInvoked: window.speciesView.chooseColumns() }
-                        ModeButton { commandId: "species.details"; iconName: "info"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.detailsOpen; onInvoked: window.speciesView.detailsOpen = !window.speciesView.detailsOpen }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Tools"
-                        ModeButton { commandId: "species.select-tool"; iconName: "selection"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.tool === "select"; onInvoked: window.speciesView.setTool("select") }
-                        ModeButton { commandId: "species.threshold-cut"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "tree-threshold"; enabled: window.speciesView !== null && !window.current.busy && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
-                        RibbonButton { commandId: "species.display"; tip: window.speciesView !== null && window.current.display_path.length ? "A display tree is attached" : "Attach or build a display tree"; iconName: "tree"; enabled: window.speciesView !== null && !window.current.busy && !window.current.display_path.length; onInvoked: window.beginDelimitation("view") }
-                    }
-                    Item { Layout.fillWidth: true }
-                    HelpGroup {}
-                }
-
-                RibbonPage {
-                    spacing: 6 * window.ribbonSizeFactor
-                    RibbonGroup {
-                        title: "Calls"
-                        disabledReason: !window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to use this group" : "Wait for trace processing to finish"
-                        enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
-                        AppComboBox {
-                            id: traceCallSets
-                            property string keyHint: "T"
-                            Accessible.name: "Trace call set"
-                            model: window.traceOpen && window.current ? JSON.parse(window.current.call_sets) : []
-                            textRole: "label"
-                            valueRole: "id"
-                            currentIndex: window.traceOpen && window.current ? model.findIndex(row => row.id === window.current.selected_call_set) : -1
-                            onActivated: window.current.select_calls(currentValue)
-                            HoverHandler { id: callSetTipHover }
-                            Accessible.description: ToolTip.text
-                            ToolTip.text: !enabled ? (!window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to choose a call set" : "Wait for trace processing to finish") : "Each call set retains its own reviewed decisions. Computed calls are an alternative, not a guarantee of greater accuracy."
-                            ToolTip.visible: callSetTipHover.hovered || activeFocus
-                        }
-                        RibbonButton { commandId: "trace.compute-calls"; enabled: window.current && !window.current.calling && window.traceDocument && window.traceDocument.traceRows.length === 1; onInvoked: window.current.compute_calls() }
-                        RibbonButton { commandId: "trace.cancel-calls"; enabled: !!window.current && !!window.current.calling; onInvoked: window.current.cancel_calls() }
-                    }
-                    RibbonGroup {
-                        title: "Issues"
-                        disabledReason: !window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to use this group" : "Wait for trace processing to finish"
-                        enabled: window.traceOpen && window.traceDocument && !window.traceDocument.working
-                        RibbonButton { commandId: "ribbon.previous-unresolved-issue"; iconName: "previous"; keys: "Alt+← or ["; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(false) }
-                        RibbonButton { commandId: "ribbon.next-unresolved-issue"; iconName: "next"; keys: "Alt+→ or ]"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(true) }
-                        RibbonButton { commandId: "ribbon.accept-this-base-and-go-to-the-next-issue"; iconName: "accept"; keys: "Alt+Enter"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.accept() }
-                        RibbonButton { commandId: "ribbon.choose-alignment-context"; enabled: (window.traceOpen && window.current && window.current.review_mode && window.traceDocument && window.traceDocument.returnAlignment === null); onInvoked: window.traceDocument.alignmentContext() }
-                        RibbonButton { commandId: "ribbon.combine-up-to-three-reads"; enabled: (window.traceOpen && window.current && window.traceDocument && window.traceDocument.traceRows.length === 1); onInvoked: window.traceDocument.draftReads() }
-                        RibbonButton { commandId: "ribbon.choose-the-terminal-signal-percentage-for-a-new-draft"; onInvoked: window.traceDocument.signalSettings() }
-                    }
-                    RibbonGroup {
-                        title: "Masking"
-                        disabledReason: !window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to use this group" : "Wait for trace processing to finish"
-                        enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
-                        RibbonButton { commandId: "ribbon.choose-the-consensus-range-to-keep-in-exports"; onInvoked: window.traceDocument.maskEnds() }
-                        RibbonButton { commandId: "ribbon.find-partial-terminal-primer-candidates-and-mask-them"; onInvoked: window.traceDocument.setPrimers() }
-                        RibbonButton { commandId: "trace.keep-from"; iconName: "trace-mask"; onInvoked: window.traceDocument.setMaskStart(window.current.selected_column) }
-                        RibbonButton { commandId: "trace.keep-through"; iconName: "trace-mask"; onInvoked: window.traceDocument.setMaskEnd(window.current.selected_column) }
-                    }
-                    RibbonGroup {
-                        title: "Export consensus"
-                        disabledReason: !window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to use this group" : "Wait for trace processing to finish"
-                        enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
-                        ExportConsensusButton { commandId: "ribbon.add-the-edited-consensus-to-its-alignment"; iconName: "consensus-to-alignment"; keys: "Ctrl+Shift+A"; enabled: window.traceDocument !== null && window.traceDocument.returnAlignment !== null && window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.addToAlignment() }
-                        ExportConsensusButton { commandId: "ribbon.export-the-edited-consensus-as-fasta"; iconName: "fasta-document"; keys: "Ctrl+Shift+E"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.exportConsensus() }
-                        ExportConsensusButton { commandId: "ribbon.copy-the-edited-consensus-as-fasta"; iconName: "clipboard"; keys: "Ctrl+Shift+C"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.copyConsensus() }
-                    }
-                    Item { Layout.fillWidth: true }
-                    HelpGroup {}
-                }
-
-                // Export: figures, specimen preparation and the complete GenBank workflow.
-                RibbonPage {
-                    spacing: 6 * window.ribbonSizeFactor
-                    RibbonGroup {
-                        title: "Figure"
-                        AppRibbonButton { action: exportSvgCommand; visible: exportSvgCommand.visible; text: commandList.ribbon_label(exportSvgCommand.commandId); iconName: "save-as"; tip: exportSvgCommand.effectiveTooltip }
-                        AppRibbonButton { action: exportPngCommand; visible: exportPngCommand.visible; text: commandList.ribbon_label(exportPngCommand.commandId); iconName: "figure-export"; tip: exportPngCommand.effectiveTooltip }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Zenodo"
-                        RibbonButton { commandId: "export.zenodo"; iconName: "save-as"; tip: "Prepare selected saved files for a Zenodo draft"; enabled: shell.project_dir.length > 0; onInvoked: { const zenodo = zenodoWindow.item; if (zenodo && (zenodo.ready || zenodoJobs.busy || zenodo.attempted)) zenodo.open(); else zenodoPicker.dialog().open() } }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Specimens"
-                        RibbonButton { commandId: "metadata.table"; iconName: "matrix"; tip: "The project's specimens, identifications and collection data"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.dialog().open() }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Import"
-                        RibbonButton { commandId: "metadata.import-headers"; iconName: "text-representation"; tip: window.metadataFasta.length ? "Read specimen IDs, taxa and values from this file's FASTA headers" : "Open a FASTA file first"; enabled: shell.project_dir.length > 0 && window.metadataFasta.length > 0; onInvoked: window.beginMetadataImport("headers", window.metadataFasta) }
-                        RibbonButton { commandId: "metadata.import-sheet"; iconName: "add-file"; enabled: shell.project_dir.length > 0; onInvoked: metadataSheetPicker.dialog().open() }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Records"
-                        RibbonButton { commandId: "metadata.template"; iconName: "new-file"; tip: window.metadataFasta.length ? "Save an .ods sheet with a row per record of this file, to fill in" : "Open a FASTA file first"; enabled: shell.project_dir.length > 0 && window.metadataFasta.length > 0; onInvoked: metadataTemplateDestination.dialog().open() }
-                        Label {
-                            objectName: "metadataLinkStatus"
-                            visible: window.metadataLinks.records !== undefined
-                            text: window.metadataLinks.records === undefined ? ""
-                                : window.metadataLinks.unlinked.length === 0 ? "All " + window.metadataLinks.records + " records linked"
-                                : window.metadataLinks.unlinked.length + " of " + window.metadataLinks.records + " records not linked"
-                            Accessible.name: text
-                        }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "GenBank"
-                        RibbonButton { commandId: "submission.new"; iconName: "new-file"; tip: window.submissionAlignment.length ? "Prepare a GenBank submission from this alignment" : "Open the marker alignment first"; enabled: shell.project_dir.length > 0 && window.submissionAlignment.length > 0; onInvoked: window.startSubmission() }
-                        RibbonButton { commandId: "submission.open"; iconName: "open"; enabled: shell.project_dir.length > 0; onInvoked: submissionPicker.dialog().open() }
-                        RibbonButton { commandId: "submission.prepare"; iconName: "edit"; tip: submissions.available ? "Rows, batch settings, reading frames, issues, package and accessions" : "Start or open a submission first"; enabled: submissions.available; onInvoked: window.showSubmission() }
-                        RibbonButton { commandId: "submission.validate"; iconName: "accept"; enabled: submissions.available && !submissionJobs.busy; onInvoked: window.validateSubmission() }
-                        RibbonButton { commandId: "submission.submitter"; iconName: "project"; onInvoked: window.showContacts() }
-                    }
-                    Item { Layout.fillWidth: true }
-                    HelpGroup {}
-                }
+            RibbonFilePage {
+                app: window; combinePicker: combinePicker; projectCommand: projectCommand
+                newSequenceCommand: newSequenceCommand; saveCommand: saveCommand; saveAsCommand: saveAsCommand
+                historyCommand: historyCommand; methodsCommand: methodsCommand; recoverCommand: recoverCommand
+            }
+            RibbonViewPage { app: window; findCommand: findCommand; textRepresentationCommand: textRepresentationCommand }
+            RibbonSequencePage {
+                app: window; addAnnotationCommand: addAnnotationCommand; editor: editor; clipboard: clipboard
+                orfDialog: orfDialog; genesDialog: genesDialog
+            }
+            RibbonAlignmentPage { app: window; renameDialog: renameDialog }
+            RibbonTreePage {
+                app: window; operationWindow: operationWindow; cladeEditor: cladeEditor; treeStyle: treeStyle
+                metadataTipLabels: metadataTipLabels; supportFile: supportFile; linkAlignmentFile: linkAlignmentFile
+            }
+            RibbonPhylogenyPage { app: window; toolSettings: toolSettings }
+            RibbonSpeciesPage {
+                app: window; specimenMetadata: specimenMetadata; rosterConsumer: rosterConsumer; treeStyle: treeStyle
+                combinePicker: combinePicker
+            }
+            RibbonTracePage { app: window }
+            RibbonExportPage {
+                app: window; exportSvgCommand: exportSvgCommand; exportPngCommand: exportPngCommand
+                zenodoWindow: zenodoWindow; zenodoJobs: zenodoJobs; zenodoPicker: zenodoPicker; specimenTable: specimenTable
+                metadataSheetPicker: metadataSheetPicker; metadataTemplateDestination: metadataTemplateDestination
+                submissions: submissions; submissionJobs: submissionJobs; submissionPicker: submissionPicker
+            }
         }
     }
 
@@ -1630,52 +968,10 @@ ApplicationWindow {
         if (!submissionWindow.item || !submissionWindow.item.opened) showSubmission()
     }
     OnDemand { id: submissionName; sourceComponent: Component { TextPromptDialog { id: submissionNameItem } } }
-    OnDemand {
-        id: submissionWindow
-        sourceComponent: Component {
-            SubmissionDialog {
-                id: submissionDialog
-                onContactDetailsRequested: window.showContacts()
-                document: JSON.parse(submissions.document || "null")
-                review: JSON.parse(submissions.review || '{"rows":[],"issues":[]}')
-                pkg: JSON.parse(submissions.package || "null")
-                geneticCodes: JSON.parse(submissions.genetic_codes())
-                path: submissions.path
-                message: submissionJobs.busy ? submissionJobs.message : submissions.message
-                messageKind: submissions.message_kind
-                canUndo: submissions.can_undo
-                canRedo: submissions.can_redo
-                validating: submissionJobs.busy
-                reviewStage: submissions.review_stage
-                validationStage: submissionJobs.message
-                reviewing: submissions.reviewing
-                parseAuthors: text => JSON.parse(submissions.preview_authors(text))
-                onDetailsRequested: details => submissions.set_details(details)
-                onInclusionPreviewRequested: rule => { inclusionPlan = JSON.parse(submissions.preview_inclusion(rule)) }
-                onInclusionPresetsRequested: save => {
-                    const result = JSON.parse(specimenMetadata.inclusion_presets(save))
-                    presetError = result.error || ""
-                    if (!result.error) inclusionPresets = result
-                }
-                onEditRequested: edit => submissions.edit(edit)
-                onPublicationRequested: (title, authors) => submissions.set_publication(title, authors)
-                onDecisionRequested: (record, decision, accession) => submissions.set_decision(record, decision, accession)
-                onFrameRequested: (record, codonStart) => submissions.set_frame(record, codonStart)
-                onConfirmDetectedRequested: submissions.confirm_detected()
-                onUndoRequested: submissions.undo()
-                onRedoRequested: submissions.redo()
-                onExportRequested: submissions.export_package()
-                onValidateRequested: window.validateSubmission()
-                onCancelValidationRequested: submissionJobs.cancel()
-                onAccessionsMatchRequested: text => {
-                    const plan = submissions.plan_accessions(text)
-                    submissionDialog.accessionPlan = plan.length ? JSON.parse(plan) : null
-                }
-                onAccessionsRecordRequested: accessions => submissions.record_accessions(accessions)
-                onAccessionTableRequested: accessionTableDestination.dialog().open()
-            }
-        }
-    }
+    OnDemand { id: submissionWindow; sourceComponent: Component { SubmissionWindow {
+        app: window; submission: submissions; validationJobs: submissionJobs; specimenData: specimenMetadata
+        accessionTableDialog: accessionTableDestination
+    } } }
     OnDemand { id: firstLaunch; objectName: "firstLaunch"; sourceComponent: Component { PreferencesDialog { welcome: true; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints } } }
     // One contact-details dialog: the GenBank submitter, then other services.
     function showContacts() {
@@ -1734,154 +1030,9 @@ ApplicationWindow {
         }
     } } }
 
-    OnDemand { id: orfDialog; sourceComponent: Component { AppContentDialog {
-        id: orfDialogItem
-        initialFocusItem: codons
-        property bool inSelection: false
-        property var source: null
-        property string sourcePath: ""
-        property var codes: []
-        property int suggested: -1
-        property string suggestedFrom: ""
-        function search(selectionOnly) {
-            if (!window.current || window.current.busy) return
-            source = window.current
-            sourcePath = source.file_path
-            inSelection = selectionOnly
-            codes = JSON.parse(source.genetic_codes())
-            const code = source.genetic_code()
-            suggested = codes.findIndex(c => c.id === code)
-            suggestedFrom = source.genetic_code_source()
-            orfCode.currentIndex = suggested
-            open()
-        }
-        title: inSelection ? "Find open reading frames in the selection" : "Find open reading frames"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        onOpened: codons.forceActiveFocus()
-        onAccepted: {
-            window.orfMinCodons = codons.value
-            if (orfCode.currentIndex < 0) return
-            if (source && source.file_path === sourcePath && !source.busy) source.find_orfs(codons.value, codes[orfCode.currentIndex].id, orfDialogItem.inSelection)
-        }
-        body: ColumnLayout {
-            spacing: 8
-            RowLayout {
-                Label { id: orfCodeLabel; text: "Genetic code" }
-                AppComboBox {
-                    id: orfCode; objectName: "orfCode"; Accessible.labelledBy: orfCodeLabel; Accessible.name: orfCodeLabel.text
-                    Layout.fillWidth: true
-                    model: orfDialogItem.codes
-                    textRole: "name"
-                }
-                Label {
-                    text: orfCode.currentIndex === orfDialogItem.suggested ? "(" + orfDialogItem.suggestedFrom + ")" : ""
-                    opacity: 0.7
-                }
-            }
-            RowLayout {
-                Label { id: codonsLabel; text: "At least" }
-                AppSpinBox {
-                    id: codons
-                    Accessible.labelledBy: codonsLabel
-                    Accessible.name: codonsLabel.text + " (codons, start to stop)"
-                    from: 10
-                    to: 10000
-                    stepSize: 10
-                    editable: true
-                    value: window.orfMinCodons
-                    Keys.onReturnPressed: orfDialogItem.accept()
-                    Keys.onEnterPressed: orfDialogItem.accept()
-                }
-                Label { text: "codons, start to stop" }
-            }
-            Label {
-                text: "Searches both strands. Each ORF is added as a misc_feature with the note \"ORF\";\none Undo removes them all."
-                opacity: 0.7
-            }
-        }
-    } } }
+    OnDemand { id: orfDialog; sourceComponent: Component { OrfDialog { app: window } } }
 
-    OnDemand { id: genesDialog; sourceComponent: Component { AppContentDialog {
-        id: genesDialogItem
-        initialFocusItem: codeBox
-        property bool inSelection: false
-        property var source: null
-        property string sourcePath: ""
-        function predict(selectionOnly) {
-            if (!window.current || window.current.busy) return
-            source = window.current
-            sourcePath = source.file_path
-            inSelection = selectionOnly
-            // Where the record states no code, Prodigal's usual inputs
-            // (bacteria, archaea, plastids) use table 11, not the standard
-            // code: its start rule differs.
-            const stated = source.genetic_code_source() !== "default"
-            const code = stated ? source.genetic_code() : 11
-            let i = -1
-            for (let k = 0; k < geneticCodes.count; k++)
-                if (geneticCodes.get(k).code === code) i = k
-            codeBox.currentIndex = i
-            suggested = i
-            suggestedFrom = stated ? source.genetic_code_source() : "usual for bacteria, archaea and plastids"
-            open()
-        }
-        property int suggested: -1
-        property string suggestedFrom: ""
-        title: inSelection ? "Predict genes in the selection" : "Predict genes"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        onOpened: codeBox.forceActiveFocus()
-        onAccepted: if (codeBox.currentIndex >= 0 && source && source.file_path === sourcePath && !source.busy) source.predict_genes(geneticCodes.get(codeBox.currentIndex).code, inSelection)
-        body: ColumnLayout {
-            spacing: 8
-            RowLayout {
-                Label { id: codeBoxLabel; text: "Genetic code" }
-                AppComboBox {
-                    id: codeBox; objectName: "codeBox"; Accessible.labelledBy: codeBoxLabel; Accessible.name: codeBoxLabel.text
-                    Layout.fillWidth: true
-                    model: geneticCodes
-                    textRole: "label"
-                    Keys.onReturnPressed: genesDialogItem.accept()
-                    Keys.onEnterPressed: genesDialogItem.accept()
-                }
-                Label {
-                    text: codeBox.currentIndex === genesDialogItem.suggested ? "(" + genesDialogItem.suggestedFrom + ")" : ""
-                    opacity: 0.7
-                }
-            }
-            Label {
-                text: "Prodigal trains on sequences of 20 kb or more. Shorter ones use its preset models,\nwhich exist only for codes 4 and 11. Genes are added as CDS; one Undo removes them all."
-                opacity: 0.7
-            }
-        }
-        // NCBI genetic codes that Prodigal supports.
-        ListModel {
-            id: geneticCodes
-            ListElement { code: 1; label: "1  Standard" }
-            ListElement { code: 2; label: "2  Vertebrate mitochondrial" }
-            ListElement { code: 3; label: "3  Yeast mitochondrial" }
-            ListElement { code: 4; label: "4  Mold, protozoan and coelenterate mitochondrial; Mycoplasma" }
-            ListElement { code: 5; label: "5  Invertebrate mitochondrial" }
-            ListElement { code: 6; label: "6  Ciliate, dasycladacean and Hexamita nuclear" }
-            ListElement { code: 9; label: "9  Echinoderm and flatworm mitochondrial" }
-            ListElement { code: 10; label: "10  Euplotid nuclear" }
-            ListElement { code: 11; label: "11  Bacterial, archaeal and plant plastid" }
-            ListElement { code: 12; label: "12  Alternative yeast nuclear" }
-            ListElement { code: 13; label: "13  Ascidian mitochondrial" }
-            ListElement { code: 14; label: "14  Alternative flatworm mitochondrial" }
-            ListElement { code: 15; label: "15  Blepharisma nuclear" }
-            ListElement { code: 16; label: "16  Chlorophycean mitochondrial" }
-            ListElement { code: 21; label: "21  Trematode mitochondrial" }
-            ListElement { code: 22; label: "22  Scenedesmus obliquus mitochondrial" }
-            ListElement { code: 23; label: "23  Thraustochytrium mitochondrial" }
-            ListElement { code: 24; label: "24  Rhabdopleuridae mitochondrial" }
-            ListElement { code: 25; label: "25  Candidate division SR1 and Gracilibacteria" }
-            ListElement { code: 26; label: "26  Pachysolen tannophilus nuclear" }
-            ListElement { code: 29; label: "29  Mesodinium nuclear" }
-            ListElement { code: 30; label: "30  Peritrich nuclear" }
-            ListElement { code: 32; label: "32  Balanophoraceae plastid" }
-            ListElement { code: 33; label: "33  Cephalodiscidae mitochondrial" }
-        }
-    } } }
+    OnDemand { id: genesDialog; sourceComponent: Component { GenePredictionDialog { app: window } } }
 
     OnDemand { id: about; sourceComponent: Component { AboutDialog {
         id: aboutItem
@@ -1992,386 +1143,14 @@ ApplicationWindow {
         }
     }
 
-    SplitView {
-        anchors.fill: parent
-        anchors.topMargin: 4
-        orientation: Qt.Horizontal
-
-        // The project's files, from Qt's QFileSystemModel; collapsible.
-        Rectangle {
-            id: sidebar
-            visible: window.sidebarOpen
-            SplitView.preferredWidth: 200
-            SplitView.minimumWidth: 120
-            color: Qt.alpha(shell.foreground, 0.03)
-
-            FileTreeModel {
-                id: files
-                rootDir: shell.project_dir
-            }
-
-            Label {
-                id: projectName
-                anchors { top: parent.top; left: parent.left; right: collapse.left; margins: 8 }
-                text: shell.project_dir.length ? window.fileName(shell.project_dir) : "No project"
-                font.bold: true
-                elide: Text.ElideMiddle
-            }
-            AppIconButton {
-                id: collapse
-                anchors { verticalCenter: projectName.verticalCenter; right: parent.right; rightMargin: 2 }
-                iconName: "left"; description: "Hide files"
-                implicitWidth: 22
-                implicitHeight: 22
-                focusPolicy: Qt.StrongFocus
-                ToolTip.text: "Hide files (Ctrl+B)"
-                ToolTip.visible: hovered
-                onClicked: window.sidebarOpen = false
-            }
-
-            TreeView {
-                id: tree
-                anchors { top: projectName.bottom; topMargin: 6; left: parent.left; right: parent.right; bottom: parent.bottom }
-                clip: true
-                model: files
-                rootIndex: files.rootIndex
-                selectionModel: ItemSelectionModel {}
-                delegate: FileTreeDelegate {
-                    currentPath: window.currentPath
-                    foreground: shell.foreground
-                    onOpenRequested: (path) => window.openPath(path)
-                }
-                ScrollBar.vertical: ScrollBar {}
-            }
-        }
-
-        // Collapsed sidebar: a thin strip to bring it back.
-        Rectangle {
-            visible: !window.sidebarOpen
-            SplitView.preferredWidth: 18
-            SplitView.minimumWidth: 18
-            SplitView.maximumWidth: 18
-            color: Qt.alpha(shell.foreground, 0.03)
-            AppIconButton {
-                anchors { top: parent.top; horizontalCenter: parent.horizontalCenter; topMargin: 4 }
-                iconName: "right"; description: "Show files"
-                implicitWidth: 18
-                implicitHeight: 22
-                focusPolicy: Qt.StrongFocus
-                ToolTip.text: "Show files (Ctrl+B)"
-                ToolTip.visible: hovered
-                onClicked: window.sidebarOpen = true
-            }
-        }
-
-        // The open files: tabs, the active document, its status line.
-        ColumnLayout {
-            SplitView.fillWidth: true
-            spacing: 0
-
-            TabBar {
-                id: tabs
-                objectName: "documentTabs"
-                Layout.fillWidth: true
-                visible: documentOpens.count > 0
-                onCurrentIndexChanged: { if (!window.applyingOpenFocus) documentOpens.revoke_focus(); Qt.callLater(window.refreshCurrent) }
-                Repeater {
-                    model: documentOpens
-                    AppTabButton {
-                        required property int index
-                        required property string path
-                        required property bool dirty
-                        onClicked: { documentOpens.revoke_focus(); window.focusOpenedDocument = true; Qt.callLater(window.refreshCurrent) }
-                        Accessible.name: window.fileName(path) + (dirty ? ", unsaved changes" : "")
-                        width: implicitWidth
-                        focusPolicy: Qt.StrongFocus
-                        contentItem: Row {
-                            spacing: 6
-                            Label {
-                                // Long names shorten in the middle, keeping
-                                // the extension; the path in the project is a
-                                // hover away.
-                                text: window.fileName(path) + (dirty ? " •" : "")
-                                width: Math.min(implicitWidth, 180)
-                                elide: Text.ElideMiddle
-                                anchors.verticalCenter: parent.verticalCenter
-                                ToolTip.text: shell.relative_path(path)
-                                ToolTip.visible: tabHover.hovered
-                                HoverHandler { id: tabHover }
-                            }
-                            AppIconButton {
-                                iconName: "close"; description: "Close tab"
-                                icon.width: 8
-                                icon.height: 8
-                                implicitWidth: 18
-                                implicitHeight: 18
-                                padding: 0
-                                focusPolicy: Qt.StrongFocus
-                                anchors.verticalCenter: parent.verticalCenter
-                                onClicked: window.closeTab(index)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Activity belongs to this document, beside its tabs and canvas.
-            AppMessageBar {
-                objectName: "documentActivity"
-                Layout.fillWidth: true
-                readonly property var controller: window.current
-                busy: !!controller && (window.currentKind === "sequence" || window.alignmentOpen || window.treeOpen) && controller.busy
-                visible: busy
-                workingText: busy ? (window.alignmentOpen && controller.bootstrap_running
-                    ? controller.bootstrap_status : controller.message) || "Working" : ""
-                cancellable: busy && window.alignmentOpen && controller.bootstrap_running && !controller.bootstrap_cancelling
-                cancelText: "Cancel bootstrap"
-                onCancelRequested: controller.cancel_bootstrap()
-            }
-
-            StackLayout {
-                id: stack
-                visible: documentOpens.count > 0
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                currentIndex: tabs.currentIndex
-
-                Repeater {
-                    id: docs
-                    model: documentOpens
-                    onItemAdded: Qt.callLater(window.refreshCurrent)
-                    onItemRemoved: Qt.callLater(window.refreshCurrent)
-                    // Each file opens in the editor for what it holds.
-                    delegate: DelegateChooser {
-                        role: "kind"
-                        DelegateChoice {
-                            roleValue: "canvas"
-                            Item {
-                                id: canvasSlot
-                                required property string path
-                                required property string openToken
-                                required property int index
-                                readonly property bool adoptedSlot: true
-                                property bool ready: false
-                                readonly property var documentView: canvasLoader.item
-                                property var admittedController: null
-                                property bool alive: true
-                                Component.onDestruction: {
-                                    alive = false
-                                    documentOpens.retire(openToken)
-                                    if (admittedController) admittedController.destroy()
-                                }
-                                Component { id: sequenceOwner; GenomeController {} }
-                                Component { id: alignmentOwner; AlignmentController {} }
-                                Component { id: treeOwner; TreeController {} }
-                                function construct(kind) {
-                                    if (!alive || admittedController) return
-                                    const factory = kind === "sequence" ? sequenceOwner : kind === "alignment" ? alignmentOwner : treeOwner
-                                    const owner = factory.createObject(canvasSlot)
-                                    if (!owner) { constructionFailed(); return }
-                                    admittedController = owner
-                                    if (!documentOpens.install(openToken, owner)) { constructionFailed(); return }
-                                    const values = {path: path, index: index, suppliedController: owner,
-                                        overviewEnabled: window.overviewEnabled, notificationSink: provenance}
-                                    if (kind === "sequence") { values.showGc = window.showGc; values.defaultLayout = window.defaultLayout }
-                                    if (kind === "alignment") { values.fileUrls = shell; values.insertMode = window.alignmentInsert }
-                                    canvasLoader.setSource(kind === "sequence" ? "DocumentView.qml" : kind === "alignment" ? "AlignmentView.qml" : "PhyloView.qml", values)
-                                }
-                                function constructionFailed() {
-                                    if (!alive) return
-                                    const token = openToken
-                                    Qt.callLater(() => {
-                                        const row = documentOpens.index_of(token)
-                                        if (row >= 0) {
-                                            provenance.notification(documentOpens.path_at(row), "Could not construct the document view", "fail")
-                                            window.removeDocument(row)
-                                        }
-                                    })
-                                }
-                                Loader {
-                                    id: canvasLoader
-                                    anchors.fill: parent
-                                    onStatusChanged: if (status === Loader.Error) canvasSlot.constructionFailed()
-                                }
-                                Binding { target: canvasLoader.item; property: "overviewEnabled"; value: window.overviewEnabled; when: canvasLoader.item !== null }
-                                Binding { target: canvasLoader.item; property: "showGc"; value: window.showGc; when: canvasLoader.item !== null && canvasLoader.item.kind === "sequence" }
-                                Binding { target: canvasLoader.item; property: "insertMode"; value: window.alignmentInsert; when: canvasLoader.item !== null && canvasLoader.item.kind === "alignment" }
-                                Binding { target: canvasLoader.item; property: "index"; value: canvasSlot.index; when: canvasLoader.item !== null }
-                                Binding { target: canvasLoader.item; property: "path"; value: canvasSlot.path; when: canvasLoader.item !== null }
-                                Connections {
-                                    target: canvasLoader.item
-                                    ignoreUnknownSignals: true
-                                    function onInitializationCompleted() {
-                                        if (!canvasSlot.alive || !documentOpens.acknowledge(canvasSlot.openToken, canvasSlot.admittedController)) return
-                                        canvasSlot.ready = true
-                                        documentOpens.activate(canvasSlot.openToken)
-                                        window.refreshCurrent(false)
-                                    }
-                                    function onDirtyChanged() { documentOpens.set_dirty(canvasSlot.index, canvasLoader.item.dirty) }
-                                    function onActivate() { tabs.currentIndex = canvasSlot.index }
-                                    function onOpenFile(path) { window.openPath(path) }
-                                    function onReviewTraces(paths, reference) { window.startTraceReview(paths, reference, canvasLoader.item) }
-                                    function onToggleInsert() { window.alignmentInsert = !window.alignmentInsert }
-                                    function onContextMenu(info) {
-                                        if (canvasLoader.item.kind === "tree") treeMenu.dialog().showFor(canvasSlot.admittedController, info)
-                                        else if (canvasLoader.item.kind === "alignment") { alnMenu.info = info; alnMenu.popup() }
-                                        else { menu.info = info; menu.popup() }
-                                    }
-                                    function onCopyText(text) { clipboard.put(text) }
-                                    function onToggleSidebar() { window.sidebarOpen = !window.sidebarOpen }
-                                    function onRenameRow() { renameDialog.dialog().askRow() }
-                                    function onRenameTip() { tipDialog.dialog().ask() }
-                                    function onAnnotate() { cladeEditor.openSelected() }
-                                    function onEditFeature(id) { editor.openFeature(id) }
-                                    function onEditSelected() { editor.openSelected() }
-                                }
-                                AppMessageBar {
-                                    anchors { left: parent.left; right: parent.right; top: parent.top }
-                                    visible: !canvasSlot.ready
-                                    busy: true
-                                    workingText: "Opening " + window.fileName(canvasSlot.path)
-                                }
-                            }
-                        }
-                        DelegateChoice {
-                            roleValue: "trace"
-                            SangerView {
-                                overviewEnabled: window.overviewEnabled
-                                notificationSink: provenance
-                                fileUrls: shell
-                                onCopyText: (text) => clipboard.put(text)
-                                onRedraft: (paths, reference, target, cutoff) => window.startTraceReview(paths, reference, target, cutoff, true)
-                                onReadOnlyFolder: path => readOnlyCopy.dialog().offered = {file: path, review: true, row: index}
-                                onDirtyChanged: documentOpens.set_dirty(index, dirty)
-                                onWorkingChanged: documentOpens.set_working(index, working)
-                            }
-                        }
-                        DelegateChoice {
-                            roleValue: "alignment"
-                            AlignmentView {
-                                overviewEnabled: window.overviewEnabled
-                                notificationSink: provenance
-                                fileUrls: shell
-                                insertMode: window.alignmentInsert
-                                onActivate: tabs.currentIndex = index
-                                onReviewTraces: (paths, reference) => {
-                                    window.startTraceReview(paths, reference, window.documentAt(tabs.currentIndex))
-                                }
-                                onToggleInsert: window.alignmentInsert = !window.alignmentInsert
-                                onOpenFile: (path) => window.openPath(path)
-                                onDirtyChanged: documentOpens.set_dirty(index, dirty)
-                                onContextMenu: (info) => { alnMenu.info = info; alnMenu.popup() }
-                                onCopyText: (text) => clipboard.put(text)
-                                onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
-                                onRenameRow: renameDialog.dialog().askRow()
-                            }
-                        }
-                        DelegateChoice {
-                            roleValue: "tree"
-                            // Not "TreeView": that's Qt's, used by the
-                            // files sidebar.
-                            PhyloView {
-                                overviewEnabled: window.overviewEnabled
-                                id: treeDocument
-                                notificationSink: provenance
-                                onOpenFile: (path) => window.openPath(path)
-                                onDirtyChanged: documentOpens.set_dirty(index, dirty)
-                                onContextMenu: (info) => treeMenu.dialog().showFor(treeDocument.controller, info)
-                                onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
-                                onRenameTip: tipDialog.dialog().ask()
-                                onAnnotate: cladeEditor.openSelected()
-                            }
-                        }
-                        DelegateChoice {
-                            roleValue: "delimitation"
-                            DelimitationView {
-                                overviewEnabled: window.overviewEnabled
-                                notificationSink: provenance
-                                onOpenFile: (path) => window.openPath(path)
-                                onSmoothingRequested: path => operationWindow.dialog().showOperation(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(path)), path, false, "basecraft.sanderson/date_tree@1")
-                                onDirtyChanged: documentOpens.set_dirty(index, dirty)
-                            }
-                        }
-                        DelegateChoice {
-                            DocumentView {
-                                id: sequenceDocument
-                                overviewEnabled: window.overviewEnabled
-                                notificationSink: provenance
-                                showGc: window.showGc
-                                defaultLayout: window.defaultLayout
-                                onDirtyChanged: documentOpens.set_dirty(index, dirty)
-                                onContextMenu: (info) => { menu.info = info; menu.popup() }
-                                onEditFeature: (id) => editor.openFeature(id)
-                                onEditSelected: editor.openSelected()
-                                onInitializeNew: window.initializeSequence(sequenceDocument)
-                                onCopyText: (text) => clipboard.put(text)
-                                onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
-                            }
-                        }
-                    }
-                }
-            }
-
-            EmptyWorkspaceBrand {
-                objectName: "emptyWorkspaceBrand"
-                visible: documentOpens.count === 0 && shell.project_dir.length === 0
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                backgroundColor: shell.background
-                recentProjects: preferences.recent_projects
-                onOpenProject: window.openProjectPicker()
-                onOpenRecent: path => window.selectProject(path)
-            }
-
-            Item {
-                visible: documentOpens.count === 0 && shell.project_dir.length > 0
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                EmptyView {
-                    objectName: "emptyProjectDocuments"
-                    anchors.centerIn: parent
-                    width: Math.min(parent.width, 48 * font.pixelSize)
-                    message: "Open a sequence, alignment, chromatogram trace, tree, Sanger review, species delimitation workspace, specimen metadata table or GenBank submission. Choose a file on the left, or use Open to browse another folder."
-                    action: openCommand
-                    actionText: "Open"
-                }
-            }
-
-            // The status line belongs to the open file, under it only.
-            Rectangle {
-                visible: documentOpens.count > 0
-                Layout.fillWidth: true
-                implicitHeight: 20
-                color: Qt.alpha(shell.foreground, 0.06)
-                RowLayout {
-                    anchors { fill: parent; leftMargin: 10; rightMargin: 10 }
-                    spacing: 12
-                    Label {
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                        text: window.current ? window.current.status : ""
-                    }
-                    // A tree's linked alignment, such as "No linked alignment".
-                    Label {
-                        objectName: "treeAlignmentStatus"
-                        readonly property string linkStatus: window.treeOpen && window.current ? (window.current.alignment_link_status || "") : ""
-                        visible: linkStatus.length > 0
-                        text: linkStatus
-                        Layout.maximumWidth: 360
-                        elide: Text.ElideMiddle
-                    }
-                    Label {
-                        readonly property string hoverText: window.alignmentDocument ? window.alignmentDocument.hoverStatus
-                            : window.traceDocument ? window.traceDocument.hoverStatus : ""
-                        visible: hoverText.length > 0
-                        text: hoverText
-                        Layout.maximumWidth: parent.width * 0.6
-                        elide: Text.ElideLeft
-                    }
-                }
-            }
-        }
+    DocumentArea {
+        id: documentArea
+        app: window
+        clipboard: clipboard; openCommand: openCommand; menu: menu; alnMenu: alnMenu; treeMenu: treeMenu
+        renameDialog: renameDialog; tipDialog: tipDialog; cladeEditor: cladeEditor; editor: editor
+        readOnlyCopy: readOnlyCopy; operationWindow: operationWindow
     }
+    readonly property TabBar tabs: documentArea.tabs
 
     AppOperations { id: blastBackend; onBusyChanged: if (!busy && blastWindow.item) blastWindow.item.completed() }
     OnDemand { id: blastWindow; sourceComponent: Component { BlastDialog {
@@ -2386,61 +1165,9 @@ ApplicationWindow {
         blastWindow.dialog().show(source => controller.blast_queries(source, annotation), mode, window.alignmentOpen, controller.record_folder())
     }
 
-    // Only what applies where you clicked: an annotation, or the selection.
-    // Global actions (zoom, whole sequence) live in the toolbar.
-    Menu {
-        id: menu
-        property var info: ({ feature: -1, label: "", featureLength: 0, selection: false, length: 0 })
-        readonly property bool onAnnotation: info.feature >= 0
-        component Item: MenuItem { height: visible ? implicitHeight : 0 }
+    SequenceContextMenu { id: menu; app: window; editor: editor; clipboard: clipboard; addAnnotationCommand: addAnnotationCommand; orfDialog: orfDialog; genesDialog: genesDialog }
 
-        Item { text: "Edit “" + menu.info.label + "”…"; visible: menu.onAnnotation; onTriggered: editor.openFeature(menu.info.feature) }
-        Item { text: "Delete “" + menu.info.label + "”"; visible: menu.onAnnotation; onTriggered: window.current.delete_feature(menu.info.feature) }
-        Item {
-            text: "Copy annotation sequence (" + menu.info.featureLength + " bp)"
-            visible: menu.onAnnotation
-            onTriggered: clipboard.put(window.current.feature_sequence(menu.info.feature))
-        }
-        Item { text: "BLAST annotation at NCBI"; visible: menu.onAnnotation; onTriggered: window.beginBlast("annotation", menu.info.feature) }
-        Item { text: "Extract as new sequence"; visible: menu.onAnnotation; onTriggered: window.current.extract_feature(menu.info.feature) }
-        Item { text: "Zoom to annotation"; visible: menu.onAnnotation; onTriggered: window.current.zoom_to_feature(menu.info.feature) }
-
-        Item { text: "Add annotation…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: addAnnotationCommand.trigger() }
-        Item {
-            text: "Copy sequence (" + menu.info.length + " bp)"
-            visible: !menu.onAnnotation
-            enabled: menu.info.selection
-            onTriggered: clipboard.put(window.current.selection_text())
-        }
-        Item { text: "Extract as new sequence"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.extract_selection() }
-        Item { text: "Zoom to selection"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.zoom_to_selection() }
-        Item { text: "BLAST selection at NCBI"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.beginBlast("selection") }
-        Item { text: "Find ORFs in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection && window.current && !window.current.busy; onTriggered: orfDialog.dialog().search(true) }
-        Item { text: "Predict genes in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection && window.current && !window.current.busy; onTriggered: genesDialog.dialog().predict(true) }
-    }
-
-    // Alignment context menu: what applies to the cells, rows or columns
-    // under the pointer.
-    Menu {
-        id: alnMenu
-        property var info: ({ region: "grid", rows: 1, columns: 1, rowName: "" })
-        readonly property bool cells: info.region === "grid"
-        readonly property bool rows: info.region === "names" || info.region === "corner"
-        readonly property bool columns: info.region === "header"
-        component AlnItem: MenuItem { height: visible ? implicitHeight : 0 }
-
-        AlnItem { text: "Insert gap"; visible: alnMenu.cells; onTriggered: window.current.insert_gap() }
-        AlnItem { text: "Remove gap to the left"; visible: alnMenu.cells; onTriggered: window.current.remove_gap() }
-        AlnItem { text: "Delete " + alnMenu.info.rows + " × " + alnMenu.info.columns + " bases"; visible: alnMenu.cells; onTriggered: window.current.delete_selection() }
-        AlnItem { text: "Rename “" + alnMenu.info.rowName + "”…"; visible: alnMenu.info.rows === 1 && !alnMenu.columns; onTriggered: renameDialog.dialog().askRow() }
-        AlnItem { text: "Move to top"; visible: alnMenu.rows; onTriggered: window.current.rows_to_top() }
-        AlnItem { text: alnMenu.info.rows === 1 ? "Delete row" : "Delete " + alnMenu.info.rows + " rows"; visible: alnMenu.rows; onTriggered: window.current.remove_rows() }
-        AlnItem { text: "Insert gap column"; visible: alnMenu.columns; onTriggered: window.current.insert_column() }
-        AlnItem { text: alnMenu.info.columns === 1 ? "Delete column" : "Delete " + alnMenu.info.columns + " columns"; visible: alnMenu.columns; onTriggered: window.current.delete_columns() }
-        AlnItem { text: "Strip gap-only columns"; visible: alnMenu.columns || alnMenu.rows; onTriggered: window.current.remove_gap_columns() }
-        AlnItem { text: "BLAST selected rows at NCBI"; onTriggered: window.beginBlast("rows") }
-        AlnItem { text: "Copy as FASTA"; onTriggered: clipboard.put(window.current.selection_text()) }
-    }
+    AlignmentContextMenu { id: alnMenu; app: window; clipboard: clipboard; renameDialog: renameDialog }
 
     OnDemand { id: renameDialog; sourceComponent: Component { TextPromptDialog {
         id: renameDialogItem
@@ -2460,51 +1187,7 @@ ApplicationWindow {
         onStyleRequested: treeStyle.dialog().openStyle("extra")
     } } }
 
-    // Where the root sits along its branch: a share of the branch on each
-    // side. Halfway after rerooting.
-    OnDemand { id: rootDialog; sourceComponent: Component { AppContentDialog {
-        id: rootDialogItem
-        initialFocusItem: rootShare
-        property var info: ({ side: "", other: "", length: 0, share: 0.5 })
-        title: "Root position"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        function ask() {
-            if (!window.treeOpen) return
-            const i = JSON.parse(window.current.root_json())
-            if (!i) {
-                window.current.message_kind = "error"
-                window.current.message = "The root needs two branches with lengths"
-                return
-            }
-            info = i
-            rootShare.value = i.share * 100
-            open()
-        }
-        function length(share) { return (info.length * share).toPrecision(3) }
-        onAccepted: window.current.move_root(rootShare.value / 100)
-        body: ColumnLayout {
-            spacing: 8
-            Label { id: rootShareLabel; text: "Share of the root branch on each side"; opacity: 0.7 }
-            GridLayout {
-                columns: width < 600 ? 1 : 3
-                Layout.fillWidth: true
-                Label { text: rootDialogItem.info.side; elide: Text.ElideMiddle; Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
-                Slider { id: rootShare; Accessible.labelledBy: rootShareLabel; Accessible.name: rootShareLabel.text + " (%)"; from: 0; to: 100; stepSize: 0.5; Layout.preferredWidth: 220; Layout.minimumWidth: 0; Layout.fillWidth: true }
-                Label { text: rootDialogItem.info.other; elide: Text.ElideMiddle; Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true }
-            }
-            GridLayout {
-                columns: width < 600 ? 1 : 3
-                Layout.fillWidth: true
-                Label {
-                    text: rootShare.value.toFixed(1) + " % · " + rootDialogItem.length(rootShare.value / 100)
-                    Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignRight
-                }
-                AppButton { text: "Halfway"; flat: true; Layout.preferredWidth: 220; Layout.minimumWidth: 0; Layout.fillWidth: true; onClicked: rootShare.value = 50 }
-                Label { text: (100 - rootShare.value).toFixed(1) + " % · " + rootDialogItem.length(1 - rootShare.value / 100); Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true }
-            }
-        }
-    } } }
+    OnDemand { id: rootDialog; sourceComponent: Component { RootPositionDialog { app: window } } }
 
     OnDemand { id: metadataTipLabels; sourceComponent: Component { SpecimenTreeLabelsDialog {
         id: metadataTipLabelsItem
@@ -2539,32 +1222,7 @@ ApplicationWindow {
         }
     } } }
 
-    OnDemand { id: supportName; sourceComponent: Component { AppContentDialog {
-        id: supportNameItem
-        initialFocusItem: supportNameField
-        property string path
-        property var controller: null
-        property var metadata: ({sets: []})
-        title: "Name the support values"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        onOpened: { supportNameField.text = metadata.sets.length === 1 ? metadata.sets[0].name : ""; supportNameField.forceActiveFocus() }
-        onAccepted: if (controller && !metadata.error) controller.add_support_from(path, supportNameField.text)
-        body: ColumnLayout {
-            spacing: 6
-            Label { text: window.fileName(supportNameItem.path) }
-            Label { text: supportNameItem.metadata.error || supportNameItem.metadata.sets.map(set => set.name).join(" / "); wrapMode: Text.Wrap; Layout.fillWidth: true }
-            Label { id: supportNameFieldLabel; text: supportNameItem.metadata.sets.length > 1 ? "Optional prefix (individual names are retained)" : "Support values name" }
-            TextField {
-                Accessible.labelledBy: supportNameFieldLabel
-                Accessible.name: supportNameFieldLabel.text
-                id: supportNameField
-                Layout.preferredWidth: 320
-                placeholderText: "e.g. Bootstrap, PP, UFBoot; empty keeps the file's names"
-                Keys.onReturnPressed: supportNameItem.accept()
-                Keys.onEnterPressed: supportNameItem.accept()
-            }
-        }
-    } } }
+    OnDemand { id: supportName; sourceComponent: Component { SupportNameDialog { app: window } } }
 
     CladeEditor {
         id: cladeEditor
@@ -2575,28 +1233,7 @@ ApplicationWindow {
         controller: window.treeOpen ? window.current : window.speciesTree
     } } }
 
-    OnDemand { id: linkAlignmentFile; sourceComponent: Component { FileDialog {
-        id: linkAlignmentFileItem
-        property var editController: null
-        property string editRevision: ""
-        function ask(target) {
-            editController = target
-            editRevision = target.record_revision()
-            open()
-        }
-        onVisibleChanged: if (visible) currentFolder = window.activeFolder()
-        title: "Link an alignment to this tree"
-        nameFilters: ["FASTA alignments (*.fasta *.fa *.fas *.afa)"]
-        onAccepted: {
-            if (!editController) return
-            if (editController.record_revision() !== editRevision) {
-                editController.message_kind = "error"
-                editController.message = "The tree changed. Choose the linked alignment again."
-                return
-            }
-            editController.link_alignment(shell.local_file_path(selectedFile))
-        }
-    } } }
+    OnDemand { id: linkAlignmentFile; sourceComponent: Component { LinkAlignmentDialog { app: window } } }
 
     function exportSvg(format) {
         svgOptions.dialog().format = format || "svg"
@@ -2606,148 +1243,13 @@ ApplicationWindow {
         svgOptions.dialog().alignment = window.alignmentOpen
         svgOptions.dialog().open()
     }
-    OnDemand { id: svgOptions; sourceComponent: Component { AppContentDialog {
-        id: svgOptionsItem
-        onAboutToShow: {
-            svgScope.currentIndex = window.treeOpen ? 2 : 0
-            svgPublication.checked = false
-            svgSelection.checked = false
-        }
-        objectName: "figureExportOptions"
-        initialFocusItem: svgScope
-        property string format: "svg"
-        property bool alignment: false
-        title: format === "png" ? "Export PNG" : "Export editable SVG"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        body: ColumnLayout {
-            Label { id: svgScopeLabel; text: "Region" }
-            AppComboBox { id: svgScope; objectName: "svgScope"; Accessible.labelledBy: svgScopeLabel; Accessible.name: svgScopeLabel.text; model: ["Visible view", "Selection", "Complete figure"] }
-            AppCheckBox { id: svgPublication; text: "Publication colours (white background)" }
-            AppCheckBox { id: svgSelection; objectName: "svgSelection"; text: "Include selection highlighting"; visible: svgOptionsItem.alignment }
-            RowLayout {
-                visible: svgOptionsItem.format === "png"
-                Label { id: pngWidthLabel; text: "PNG width (pixels)"; visible: svgOptionsItem.format === "png" }
-                AppSpinBox {
-                    id: pngWidth
-                    objectName: "pngWidth"
-                    visible: svgOptionsItem.format === "png"
-                    from: 1
-                    to: 10000
-                    value: 1500
-                    editable: true
-                    Accessible.labelledBy: pngWidthLabel
-                    Accessible.name: pngWidthLabel.text
-                }
-            }
-        }
-        onAccepted: {
-            svgDialog.dialog().format = svgOptionsItem.format
-            svgDialog.dialog().scope = svgScope.currentIndex
-            svgDialog.dialog().publication = svgPublication.checked
-            svgDialog.dialog().alignment = svgOptionsItem.alignment
-            svgDialog.dialog().includeSelection = svgSelection.checked
-            svgDialog.dialog().rasterWidth = pngWidth.value
-            svgDialog.dialog().selectedFile = shell.local_file_url(svgDialog.dialog().sourcePath.replace(/\.[^./]*$/, "") + "." + svgDialog.dialog().format)
-            svgDialog.dialog().open()
-        }
-    } } }
+    OnDemand { id: svgOptions; sourceComponent: Component { FigureExportOptionsDialog { app: window; fileDialog: svgDialog } } }
 
-    OnDemand { id: svgDialog; sourceComponent: Component { FileDialog {
-        id: svgDialogItem
-        onVisibleChanged: if (visible) currentFolder = window.activeFolder()
-        property var controller: null
-        property string sourcePath: ""
-        property string format: "svg"
-        property int scope: 0
-        property bool publication: false
-        property int rasterWidth: 1500
-        property bool alignment: false
-        property bool includeSelection: false
-        title: format === "png" ? "Export PNG" : "Export SVG"
-        fileMode: FileDialog.SaveFile
-        nameFilters: format === "png" ? ["PNG images (*.png)"] : ["SVG figures (*.svg)"]
-        onAccepted: {
-            if (!controller) return
-            if (alignment && format === "png") controller.export_figure_png_selection(shell.local_file_path(selectedFile), scope, publication, rasterWidth, includeSelection)
-            else if (alignment) controller.export_figure_selection(shell.local_file_path(selectedFile), scope, publication, includeSelection)
-            else if (format === "png") controller.export_figure_png(shell.local_file_path(selectedFile), scope, publication, rasterWidth)
-            else controller.export_figure(shell.local_file_path(selectedFile), scope, publication)
-        }
-    } } }
+    OnDemand { id: svgDialog; sourceComponent: Component { FigureExportFileDialog { app: window } } }
 
-    // Quitting with unsaved changes: save them all, throw them away, or
-    // stay.
-    OnDemand { id: quitDialog; sourceComponent: Component { AppFormDialog {
-        id: quitDialogItem
-        objectName: "quitDocumentsDialog"
-        property var unsaved: []
-        title: "Save changes before closing?"
-        standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
-        function ask(targets, error) {
-            unsaved = targets
-            quitError.text = error || ""
-            open()
-        }
-        ColumnLayout {
-            Kirigami.FormData.isSection: true
-            Layout.fillWidth: true
-            spacing: 6
-            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: quitDialogItem.unsaved.length === 1 ? "This file has unsaved changes:" : "These files have unsaved changes:" }
-            Repeater {
-                model: quitDialogItem.unsaved
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.Wrap
-                    required property var modelData
-                    text: "  " + window.fileName(modelData.path)
-                    font.bold: true
-                }
-            }
-            AppErrorLabel { id: quitError; visible: text.length > 0; color: shell.accent; wrapMode: Text.Wrap }
-        }
-        onAccepted: window.quitStep(JSON.parse(documentOpens.save_all(JSON.stringify(unsaved))))
-        onDiscarded: { close(); window.quitStep(JSON.parse(documentOpens.discard_all(JSON.stringify(unsaved)))) }
-    } } }
+    OnDemand { id: quitDialog; sourceComponent: Component { QuitDialog { app: window } } }
 
-    OnDemand { id: confirmClose; sourceComponent: Component { AppFormDialog {
-        id: confirmCloseItem
-        objectName: "closeDocumentDialog"
-        property var target: null
-        property string saveError: ""
-        title: "Save changes?"
-        standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
-        AppErrorLabel {
-            Accessible.role: confirmCloseItem.saveError.length ? Accessible.AlertMessage : Accessible.StaticText
-            Kirigami.FormData.isSection: true
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-            text: confirmCloseItem.saveError.length ? confirmCloseItem.saveError : "This file has unsaved changes."
-        }
-        onAccepted: {
-            const owner = target
-            if (documentOpens.target_index(owner.token, owner.path) < 0) return
-            window.saveTarget(owner, "", function(success) {
-                const row = documentOpens.target_index(owner.token, owner.path)
-                if (row < 0) return
-                if (!success) {
-                    confirmCloseItem.target = owner
-                    confirmCloseItem.saveError = owner.controller.message || "Save the review to a file first"
-                    confirmCloseItem.open()
-                    return
-                }
-                confirmCloseItem.saveError = ""
-                window.removeDocument(row)
-                Qt.callLater(window.refreshCurrent)
-            })
-        }
-        onDiscarded: {
-            const row = documentOpens.target_index(target.token, target.path)
-            close()
-            if (row < 0) return
-            window.removeDocument(row)
-            Qt.callLater(window.refreshCurrent)
-        }
-    } } }
+    OnDemand { id: confirmClose; sourceComponent: Component { CloseDocumentDialog { app: window } } }
 
     FeatureEditor {
         id: editor

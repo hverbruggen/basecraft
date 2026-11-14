@@ -21,11 +21,7 @@ Main {
     property var allNames: ["specimen_01", "specimen_02", "specimen_03", "specimen_04", "specimen_05", "specimen_06", "specimen_07", "specimen_08"]
     DocumentOpens { id: adapter }
     QtObject { id: unsupported }
-    // Main's DocumentOpens, which a derived window reaches only by walking its objects.
-    function opens() {
-        for (const item of test.contentData) if (item && item !== adapter && typeof item.add_tab === "function") return item
-        return null
-    }
+    function opens() { return test.documentOpens }
     function check(ok, message) {
         if (!ok) { test.objectName = "stage " + stage + ": " + message; console.error("LINKED_TAXA stage " + stage + ": " + message); Qt.exit(2); throw new Error(message) }
     }

@@ -355,9 +355,9 @@ Main {
             record.close()
             // A missing project folder changes nothing; an existing one is chosen.
             selectProject(folder + "/missing")
-            check(dialog("preferences").project_error.includes("/missing") && metadataProject !== folder + "/missing", "missing project accepted")
+            check(walk.preferences.project_error.includes("/missing") && metadataProject !== folder + "/missing", "missing project accepted")
             selectProject(folder)
-            check(metadataProject === folder && dialog("preferences").recent_projects.includes(folder) && dialog("preferences").project_error === "", "project not chosen")
+            check(metadataProject === folder && walk.preferences.recent_projects.includes(folder) && walk.preferences.project_error === "", "project not chosen")
             check(command("file.new-sequence").enabled, "new sequence still disabled with a project")
         })
         // Figure export options: PNG width, selection for alignments only.
@@ -570,7 +570,7 @@ Main {
             currentView.forceActiveFocus()
             edited.focus = activeFocusItem
             selectProject(folder + "/second")
-            check(dialog("preferences").project_error.startsWith("A task is still running") && metadataProject === folder && documentTabs().count === edited.tabs, "a busy tab did not refuse the switch first")
+            check(walk.preferences.project_error.startsWith("A task is still running") && metadataProject === folder && documentTabs().count === edited.tabs, "a busy tab did not refuse the switch first")
         })
         list.push(until(() => !edited.controller.busy, "the ORF finder did not finish"))
         list.push(() => {
@@ -586,7 +586,7 @@ Main {
         list.push(until(() => JSON.parse(jobWatch.jobs).some(j => j.operation.includes("registry-fixture") && j.status === "running"), "the hanging run is not in the job list"))
         list.push(() => {
             selectProject(folder + "/second")
-            check(dialog("preferences").project_error.startsWith("A task is still running"), "a running job did not refuse the switch")
+            check(walk.preferences.project_error.startsWith("A task is still running"), "a running job did not refuse the switch")
             const row = JSON.parse(jobWatch.jobs).find(j => j.operation.includes("registry-fixture") && j.status === "running")
             check(row.cancellable, "the running plugin cannot be cancelled")
             jobWatch.cancel(row.id)
@@ -603,9 +603,9 @@ Main {
             ask.discarded()
             check(documentTabs().count === 0, "switching project left documents open")
         })
-        list.push(until(() => metadataProject === folder + "/second" || dialog("preferences").project_error.length > 0, "the project choice never finished"))
+        list.push(until(() => metadataProject === folder + "/second" || walk.preferences.project_error.length > 0, "the project choice never finished"))
         list.push(() => {
-            const error = dialog("preferences").project_error
+            const error = walk.preferences.project_error
             check(metadataProject === folder + "/second" && error === "", "project did not switch after its documents closed: " + error)
         })
         // D16: a file in a recent project other than the chosen one asks
@@ -627,7 +627,7 @@ Main {
             press("switchToProject")
         })
         list.push(until(() => metadataProject === folder && tabOf(folder + "/locus.gb") >= 0, "Switch did not choose the file's project and open the file"))
-        list.push(() => check(tabOf(folder + "/rooted.nwk") < 0 && dialog("preferences").project_error === "", "the switch left the other project's tabs open"))
+        list.push(() => check(tabOf(folder + "/rooted.nwk") < 0 && walk.preferences.project_error === "", "the switch left the other project's tabs open"))
         list.push(() => { console.log("RIBBON_WALK passed"); Qt.quit() })
         return list
     }
