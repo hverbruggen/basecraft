@@ -58,9 +58,9 @@ pub enum Denial {
 /// Propagation must preserve this type; never inspect message text for denial.
 #[derive(Debug, thiserror::Error)]
 pub enum AccessError {
-    #[error("permission_denied: {0}")]
+    #[error("{0}")]
     Denied(Denial),
-    #[error("output_conflict: destination already exists")]
+    #[error("destination already exists")]
     DestinationExists,
     #[error(transparent)]
     Io(#[from] std::io::Error),
