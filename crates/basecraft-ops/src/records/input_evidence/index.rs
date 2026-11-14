@@ -94,7 +94,6 @@ fn copies(dir: &Path, stem: &str) -> Result<Vec<PathBuf>> {
 
 fn read<T: serde::de::DeserializeOwned>(path: &Path, version: fn(&T) -> u32) -> Result<T> {
     let bytes = std::fs::read(path)?;
-    #[cfg(feature = "test-counters")]
     basecraft_io::counters::record_read(path, bytes.len() as u64);
     let (record, writer) =
         basecraft_protocol::records::decode_written::<T>(&bytes).map_err(|e| {

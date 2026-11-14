@@ -430,14 +430,9 @@ impl Session {
     }
 
     pub fn snapshot_file(&self, path: &Path) -> Result<String> {
-        #[cfg(feature = "test-counters")]
-        {
-            let bytes = std::fs::read(path)?;
-            basecraft_io::counters::record_read(path, bytes.len() as u64);
-            self.snapshot_bytes(&bytes)
-        }
-        #[cfg(not(feature = "test-counters"))]
-        self.snapshot_bytes(&std::fs::read(path)?)
+        let bytes = std::fs::read(path)?;
+        basecraft_io::counters::record_read(path, bytes.len() as u64);
+        self.snapshot_bytes(&bytes)
     }
 
     /// Hash and retain the exact immutable buffer consumed by an analysis.

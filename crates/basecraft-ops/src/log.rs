@@ -14,24 +14,36 @@ pub fn log_dir(root: &Path) -> PathBuf {
     root.join(".basecraft").join("log")
 }
 
-#[cfg(test)]
-#[derive(Default)]
-pub(crate) struct Faults {
-    pub after_bytes: Option<usize>,
-    pub sync: bool,
-    pub rollback_sync: bool,
+/// The open journal file as the writer uses it. Tests wrap it to make a
+/// write or a sync fail.
+pub(crate) trait JournalFile: Write + Send + Sync {
+    fn len(&self) -> std::io::Result<u64>;
+    fn sync_data(&mut self) -> std::io::Result<()>;
+    fn set_len(&mut self, len: u64) -> std::io::Result<()>;
+}
+
+impl JournalFile for File {
+    fn len(&self) -> std::io::Result<u64> {
+        Ok(self.metadata()?.len())
+    }
+    fn sync_data(&mut self) -> std::io::Result<()> {
+        File::sync_data(self)
+    }
+    fn set_len(&mut self, len: u64) -> std::io::Result<()> {
+        File::set_len(self, len)
+    }
 }
 
 pub struct LogWriter {
     dir: PathBuf,
-    open: Option<(String, File)>,
+    open: Option<(String, Box<dyn JournalFile>)>,
     stream: String,
     sequence: u64,
     segment: u64,
     poisoned: bool,
     poison_marker: PathBuf,
-    #[cfg(test)]
-    pub(crate) faults: Faults,
+    /// Turns each journal file into what the writer writes to.
+    wrap: fn(File) -> Box<dyn JournalFile>,
 }
 
 impl LogWriter {
@@ -44,8 +56,7 @@ impl LogWriter {
             segment: 0,
             poisoned: false,
             poison_marker: root.join("recovery-integrity-error.json"),
-            #[cfg(test)]
-            faults: Faults::default(),
+            wrap: |file| Box::new(file),
         }
     }
 
@@ -68,7 +79,7 @@ impl LogWriter {
         if self
             .open
             .as_ref()
-            .is_some_and(|(_, file)| file.metadata().is_ok_and(|m| m.len() >= 8 << 20))
+            .is_some_and(|(_, file)| file.len().is_ok_and(|len| len >= 8 << 20))
         {
             self.open = None;
             self.segment += 1;
@@ -79,36 +90,21 @@ impl LogWriter {
                 .dir
                 .join(format!("{month}-{}-{:06}.jsonl", self.stream, self.segment));
             let file = OpenOptions::new().create(true).append(true).open(path)?;
-            self.open = Some((month, file));
+            self.open = Some((month, (self.wrap)(file)));
         }
         let line = encode(entries, self.sequence)?;
         if let Some((_, f)) = &mut self.open {
             // One write per line: with O_APPEND, a crash can't interleave
             // half lines.
-            let previous_length = f.metadata()?.len();
+            let previous_length = f.len()?;
             let written = (|| -> std::io::Result<()> {
-                #[cfg(test)]
-                if let Some(bytes) = self.faults.after_bytes.take() {
-                    f.write_all(&line[..bytes.min(line.len())])?;
-                    return Err(std::io::Error::other("injected partial journal write"));
-                }
                 f.write_all(&line)?;
-                #[cfg(test)]
-                if std::mem::take(&mut self.faults.sync) {
-                    return Err(std::io::Error::other("injected journal sync failure"));
-                }
-                #[cfg(feature = "test-counters")]
                 basecraft_io::counters::record_sync_data();
                 f.sync_data()
             })();
             if let Err(error) = written {
                 if f.set_len(previous_length)
                     .and_then(|()| {
-                        #[cfg(test)]
-                        if std::mem::take(&mut self.faults.rollback_sync) {
-                            return Err(std::io::Error::other("injected rollback sync failure"));
-                        }
-                        #[cfg(feature = "test-counters")]
                         basecraft_io::counters::record_sync_data();
                         f.sync_data()
                     })
@@ -735,6 +731,74 @@ fn actor_note(actor: &Actor) -> String {
     }
 }
 
+/// Journal writes that fail on cue, for tests of the writer's rollback.
+#[cfg(test)]
+pub(crate) mod failing {
+    use super::{JournalFile, LogWriter};
+    use std::cell::Cell;
+    use std::io::{Error, Result, Write};
+
+    /// What the next journal write on this thread suffers.
+    #[derive(Clone, Copy, Default)]
+    pub(crate) struct Faults {
+        /// Write only this many bytes of the next line, then fail.
+        pub after_bytes: Option<usize>,
+        /// Fail the sync after a complete line.
+        pub sync: bool,
+        /// Fail the sync that confirms a rollback.
+        pub rollback_sync: bool,
+    }
+
+    thread_local! { static FAULTS: Cell<Faults> = Cell::default(); }
+
+    /// A journal file, and whether a rollback has truncated it.
+    struct Failing(Box<dyn JournalFile>, bool);
+
+    /// Make `writer`'s journal suffer `faults`, now and for files it opens later.
+    pub(crate) fn fail(writer: &mut LogWriter, faults: Faults) {
+        FAULTS.set(faults);
+        writer.wrap = |file| Box::new(Failing(Box::new(file), false));
+        if let Some((month, file)) = writer.open.take() {
+            writer.open = Some((month, Box::new(Failing(file, false))));
+        }
+    }
+
+    impl Write for Failing {
+        fn write(&mut self, buf: &[u8]) -> Result<usize> {
+            let mut faults = FAULTS.get();
+            if let Some(bytes) = faults.after_bytes.take() {
+                FAULTS.set(faults);
+                self.0.write_all(&buf[..bytes.min(buf.len())])?;
+                return Err(Error::other("injected partial journal write"));
+            }
+            self.0.write(buf)
+        }
+        fn flush(&mut self) -> Result<()> {
+            self.0.flush()
+        }
+    }
+
+    impl JournalFile for Failing {
+        fn len(&self) -> Result<u64> {
+            self.0.len()
+        }
+        fn sync_data(&mut self) -> Result<()> {
+            let mut faults = FAULTS.get();
+            let fail = std::mem::take(&mut faults.sync)
+                || self.1 && std::mem::take(&mut faults.rollback_sync);
+            FAULTS.set(faults);
+            if fail {
+                return Err(Error::other("injected journal sync failure"));
+            }
+            self.0.sync_data()
+        }
+        fn set_len(&mut self, len: u64) -> Result<()> {
+            self.1 = true;
+            self.0.set_len(len)
+        }
+    }
+}
+
 #[cfg(test)]
 mod activity_tests {
     use super::*;
@@ -758,12 +822,15 @@ mod activity_tests {
             if populated {
                 writer.append(&entry).unwrap();
             }
-            let length = writer
-                .open
-                .as_ref()
-                .map_or(0, |(_, f)| f.metadata().unwrap().len());
-            writer.faults.after_bytes = Some(7);
-            writer.faults.rollback_sync = true;
+            let length = writer.open.as_ref().map_or(0, |(_, f)| f.len().unwrap());
+            failing::fail(
+                &mut writer,
+                failing::Faults {
+                    after_bytes: Some(7),
+                    rollback_sync: true,
+                    ..Default::default()
+                },
+            );
             assert!(writer.append(&entry).is_err());
             let bytes = fs::read(work.join("recovery-integrity-error.json")).unwrap();
             let expected = basecraft_protocol::records::encode(&serde_json::json!({

@@ -516,7 +516,6 @@ fn annotated_rows(doc: &AlignmentDoc, gff: Option<&Source>) -> Vec<(String, u64)
 /// Write explicit alignment contents as FASTA, 60 columns a line.
 /// Synthetic suffix padding used to display ragged input is never materialised.
 pub fn write_alignment(doc: &AlignmentDoc, w: &mut dyn Write) -> io::Result<()> {
-    #[cfg(feature = "test-counters")]
     basecraft_io::counters::record_serialization("alignment");
     let mut buf = Vec::new();
     let chunk = 60 * 16_384;
@@ -1087,7 +1086,6 @@ fn open_fasta_from(path: &Path, file: Arc<fasta::IndexedFasta>) -> Result<Opened
     let sidecar = gff_sidecar(path);
     let gff = if sidecar.exists() {
         let bytes = std::fs::read(&sidecar)?;
-        #[cfg(feature = "test-counters")]
         basecraft_io::counters::record_read(&sidecar, bytes.len() as u64);
         Some(bytes)
     } else {
@@ -1224,7 +1222,6 @@ pub(crate) fn locus_names(bytes: &[u8]) -> impl Iterator<Item = (usize, &[u8])> 
 
 /// Serialise the main file of a document.
 pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
-    #[cfg(feature = "test-counters")]
     basecraft_io::counters::record_serialization("sequence");
     let doc = &opened.doc;
     match opened.format {

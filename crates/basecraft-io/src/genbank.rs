@@ -89,7 +89,6 @@ pub fn open_hashed(path: &std::path::Path) -> Result<(First, String)> {
     rest.try_reserve_exact(size.saturating_sub(consumed))
         .map_err(io::Error::other)?;
     buffered.read_to_end(&mut rest)?;
-    #[cfg(feature = "test-counters")]
     crate::counters::record_read(path, reader.bytes);
     Ok((first(records, rest)?, reader.hash.finish()))
 }

@@ -194,7 +194,6 @@ impl History<'_> {
         let retain =
             |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
                 let bytes = std::fs::read(path)?;
-                #[cfg(feature = "test-counters")]
                 basecraft_io::counters::record_read(path, bytes.len() as u64);
                 if basecraft_io::hash_bytes(&bytes) != hash {
                     return Err(Error::ChangedOnDisk {

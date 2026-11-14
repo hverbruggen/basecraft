@@ -1,4 +1,5 @@
 //! Opt-in test instrumentation for synchronous I/O on the current thread.
+//! Without the `test-counters` feature nothing is recorded.
 //!
 //! Reads count successful complete reads, not failed/partial reads or physical
 //! disk accesses. Sync counts are invocations (including failed attempts).
@@ -29,6 +30,8 @@ pub struct Counters {
     pub unresolved_reads: u64,
 }
 
+const ON: bool = cfg!(feature = "test-counters");
+
 thread_local! {
     static COUNTERS: RefCell<Counters> = RefCell::new(Counters::default());
 }
@@ -42,11 +45,17 @@ pub fn snapshot() -> Counters {
 }
 
 pub fn record_serialization(kind: &'static str) {
+    if !ON {
+        return;
+    }
     COUNTERS.with(|c| *c.borrow_mut().serializations.entry(kind).or_default() += 1);
 }
 
 /// Record only at the completed read, never again in a delegating hash helper.
 pub fn record_read(path: &Path, bytes: u64) {
+    if !ON {
+        return;
+    }
     COUNTERS.with(|c| {
         let mut counters = c.borrow_mut();
         if let Ok(path) = path.canonicalize() {
@@ -63,6 +72,9 @@ pub fn record_read(path: &Path, bytes: u64) {
 /// cumulative since reset; sum values for attempts, sum (value - 1) for repeats
 /// of the same supplied path. Aliased paths deliberately remain distinct.
 pub fn record_store_inspection(path: &Path) {
+    if !ON {
+        return;
+    }
     COUNTERS.with(|c| {
         *c.borrow_mut()
             .store_inspections
@@ -72,14 +84,20 @@ pub fn record_store_inspection(path: &Path) {
 }
 
 pub fn record_sync_data() {
+    if !ON {
+        return;
+    }
     COUNTERS.with(|c| c.borrow_mut().sync_data += 1);
 }
 
 pub fn record_sync_all() {
+    if !ON {
+        return;
+    }
     COUNTERS.with(|c| c.borrow_mut().sync_all += 1);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-counters"))]
 mod tests {
     use super::*;
 

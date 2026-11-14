@@ -278,7 +278,6 @@ fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
                 "remove" => std::fs::remove_file(&path).unwrap(),
                 _ => {}
             }
-            #[cfg(feature = "test-counters")]
             basecraft_io::counters::reset();
             let files::Loaded::Tree(loaded) = files::load_from(&path, source).unwrap() else {
                 panic!("expected tree");
@@ -552,7 +551,6 @@ fn cold_recoverable_edit_reads_no_source_bytes_and_recovery_needs_the_originals(
     let (id, _) = session.open_classified(&path).unwrap();
     let recovery = session.recovery_root().to_path_buf();
     assert!(!recovery.exists());
-    #[cfg(feature = "test-counters")]
     basecraft_io::counters::reset();
     session
         .apply(id, basecraft_protocol::Op::seq_replace(0, 1, "G"))
