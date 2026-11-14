@@ -87,11 +87,11 @@ pub enum Error {
     AppPaths(#[from] basecraft_platform::paths::PathError),
     #[error("{0}")]
     EvidenceConflict(Box<crate::records::input_evidence::EvidenceConflict>),
-    #[error("evidence_check_incomplete: could not check all analysis evidence")]
+    #[error("could not check all analysis evidence")]
     EvidenceCheckIncomplete(Box<crate::records::input_evidence::EvidenceCheck>),
-    #[error("evidence_check_incomplete: explicit save decision required")]
+    #[error("explicit save decision required")]
     SaveCheckRequired(Box<crate::session::SaveCheck>),
-    #[error("save_decision_stale: review the refreshed save check")]
+    #[error("review the refreshed save check")]
     SaveDecisionStale(Box<crate::session::SaveCheck>),
     #[error(transparent)]
     PublishedWithFailure(Box<crate::records::replay::PublishedWithFailure>),

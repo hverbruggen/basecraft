@@ -296,13 +296,13 @@ fn update(
     replace: bool,
 ) -> Result<Vec<PathBuf>> {
     let unwritable = |detail: String| {
-        crate::error::invalid(format!(
+        format!(
             "cannot record which analyses use files in {}: {detail}",
             home.display()
-        ))
+        )
     };
     if let Some(reason) = foreign_basecraft(home) {
-        return Err(unwritable(reason.into()));
+        return Err(crate::Error::Unsupported(unwritable(reason.into())));
     }
     let result = (|| -> Result<()> {
         folder(&index_root(home))?;
@@ -335,10 +335,12 @@ fn update(
             if tempfile::tempfile_in(home).is_err() {
                 Ok(Vec::new())
             } else {
-                Err(unwritable(error.to_string()))
+                Err(std::io::Error::new(error.kind(), unwritable(error.to_string())).into())
             }
         }
-        Err(crate::Error::Io(error)) => Err(unwritable(error.to_string())),
+        Err(crate::Error::Io(error)) => {
+            Err(std::io::Error::new(error.kind(), unwritable(error.to_string())).into())
+        }
         Err(error) => Err(error),
     }
 }
@@ -400,16 +402,14 @@ pub(super) fn listed(source: &Path, project: Option<&Path>) -> Result<Vec<PathBu
     let Some((home, entry)) = home(&lexical(source), project) else {
         return Ok(Vec::new());
     };
-    let mut inspection = super::Inspection::default();
-    let indexes = stores_in(&bucket(&home, &entry), &mut inspection);
-    if let Some(issue) = inspection.issues.first() {
-        return Err(crate::error::invalid(issue.reason.clone()));
+    let mut stores = Vec::new();
+    for path in copies(&bucket(&home, &entry), "")? {
+        let index = read(&path, |i: &AnalysisIndex| i.schema_version)?;
+        if index.files.contains(&entry) {
+            stores.push(lexical(&home.join(&index.store)));
+        }
     }
-    Ok(indexes
-        .into_iter()
-        .filter(|(_, index)| index.files.contains(&entry))
-        .map(|(store, _)| store)
-        .collect())
+    Ok(stores)
 }
 
 /// Stores that can refer to `target`. The index at the root of the session's

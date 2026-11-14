@@ -15,13 +15,18 @@ trait Fixture: Sized {
 macro_rules! owned_fixture {
     ($controller:ty) => {
         impl Fixture for $controller {
-            fn load(self: std::pin::Pin<&mut Self>, path: &std::path::Path) {
+            fn load(mut self: std::pin::Pin<&mut Self>, path: &std::path::Path) {
                 let candidate = crate::document_open::Candidate::acquire(
                     path.to_str().unwrap(),
                     &std::sync::atomic::AtomicBool::new(false),
                 )
                 .unwrap();
-                self.install_fresh(candidate).unwrap();
+                // Session, document and generation of the candidate handed over.
+                let handed = candidate.session.record_revision(candidate.doc).unwrap();
+                let file = candidate.path.to_string_lossy().into_owned();
+                self.as_mut().install_fresh(candidate).unwrap();
+                assert_eq!(self.record_revision().to_string(), handed, "{file}");
+                assert_eq!(self.file_path().to_string(), file);
             }
         }
     };

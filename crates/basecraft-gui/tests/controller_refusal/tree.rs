@@ -1,5 +1,6 @@
 //! Fault injection at the real `QObject` boundary, run by `application_bootstrap`.
 use super::*;
+use basecraft_ops::DocId;
 
 fn state(controller: &qobject::TreeController, original: DocId) -> Value {
     let r = controller.rust();

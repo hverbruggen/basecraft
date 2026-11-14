@@ -14,6 +14,7 @@ pub mod requests;
 pub mod sanger_commands;
 pub mod sanger_review;
 pub mod session;
+pub mod species_analysis;
 pub mod submission;
 pub mod work;
 

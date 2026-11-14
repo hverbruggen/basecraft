@@ -7,9 +7,16 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use basecraft_protocol::records::{StoreFormat, StoreMarker};
+use basecraft_protocol::input_records::EvidenceState;
+use basecraft_protocol::records::{
+    AnalysisRun, AnalysisRunStatus, ResultBinding, StoreFormat, StoreMarker,
+};
 
-use crate::{Result, error::invalid};
+use crate::{
+    Error, Result,
+    error::{damaged, invalid, limit, unsupported},
+    records::input_evidence::{SubmittedInput, read_input, relative, write_input, write_json},
+};
 
 #[derive(Clone, Debug)]
 pub struct ArtifactRun {
@@ -26,13 +33,20 @@ fn component(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Refuse `path` as damaged, with `detail`, unless it is a folder. A
+/// symbolic link is not followed, so it is refused too.
+pub(crate) fn ordinary_folder(path: &Path, detail: &str) -> Result<()> {
+    if std::fs::symlink_metadata(path)?.is_dir() {
+        Ok(())
+    } else {
+        Err(damaged(path, detail))
+    }
+}
+
 fn directory(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
-        Ok(_) => Err(invalid(format!(
-            "unsafe artifact directory: {}",
-            path.display()
-        ))),
+        Ok(_) => Err(damaged(path, "unsafe artifact directory")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             std::fs::create_dir(path)?;
             Ok(())
@@ -44,7 +58,7 @@ fn directory(path: &Path) -> Result<()> {
 impl ArtifactRun {
     /// Enumerate owned runs without creating storage. Exceeding the bound is an
     /// explicit incomplete query, never a silently truncated inventory.
-    pub fn runs_for_anchor(anchor: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+    pub fn runs_for_anchor(anchor: &Path, bound: usize) -> Result<Vec<PathBuf>> {
         let parent = anchor
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
@@ -55,7 +69,7 @@ impl ArtifactRun {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error.into()),
             Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
-                return Err(invalid("unsafe analysis metadata directory"));
+                return Err(damaged(hidden, "unsafe analysis metadata directory"));
             }
             Ok(_) => {}
         }
@@ -65,21 +79,16 @@ impl ArtifactRun {
         }
         Self::validate_store(&store)?;
         let runs = store.join("runs");
-        let metadata = std::fs::symlink_metadata(&runs)?;
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(invalid("unsafe analysis runs directory"));
-        }
+        ordinary_folder(&runs, "unsafe analysis runs directory")?;
         let mut found = Vec::new();
-        for (index, entry) in std::fs::read_dir(runs)?.enumerate() {
-            if index >= limit {
-                return Err(invalid(
-                    "analysis run lookup limit exceeded; inventory incomplete",
-                ));
+        for (index, entry) in std::fs::read_dir(&runs)?.enumerate() {
+            if index >= bound {
+                return Err(limit("analysis runs listed", bound as u64));
             }
             let entry = entry?;
             let metadata = entry.file_type()?;
             if metadata.is_symlink() {
-                return Err(invalid("symlink in owned analysis runs"));
+                return Err(damaged(entry.path(), "symlink in owned analysis runs"));
             }
             if metadata.is_dir() {
                 found.push(entry.path());
@@ -144,20 +153,17 @@ impl ArtifactRun {
     }
 
     pub fn validate_store(store: &Path) -> Result<()> {
-        let metadata = std::fs::symlink_metadata(store)?;
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(invalid("analysis namespace is not an ordinary directory"));
-        }
+        ordinary_folder(store, "analysis namespace is not an ordinary directory")?;
         let marker = store.join("store.json");
         let metadata = std::fs::symlink_metadata(&marker)?;
         if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 4096 {
-            return Err(invalid("analysis namespace has an unsafe marker"));
+            return Err(damaged(marker, "analysis namespace has an unsafe marker"));
         }
         let (value, writer) = basecraft_protocol::records::decode_written::<serde_json::Value>(
             &std::fs::read(marker)?,
         )?;
         if value["format"] != "basecraft.analysis-store" || value["schema_version"] != 1 {
-            return Err(invalid(format!(
+            return Err(unsupported(format!(
                 "foreign or unsupported analysis namespace; nothing was migrated ({})",
                 basecraft_protocol::records::other_format(&writer, &value["schema_version"], 1)
             )));
@@ -172,6 +178,10 @@ impl ArtifactRun {
     pub fn directory(&self) -> &Path {
         &self.directory
     }
+    /// The store holding this run, `<store>/runs/<id>`.
+    pub(crate) fn store(&self) -> &Path {
+        self.directory.ancestors().nth(2).unwrap_or(&self.directory)
+    }
     /// The file `name` in the run folder.
     pub fn artifact(&self, name: &str) -> Result<PathBuf> {
         component(name)?;
@@ -180,22 +190,13 @@ impl ArtifactRun {
 
     /// Write this run's `run.json` with its status and the result it is named
     /// by. A tool run keeps the process and source it was made with.
-    pub fn write_run(
-        &self,
-        status: basecraft_protocol::records::AnalysisRunStatus,
-        result: Option<String>,
-    ) -> Result<()> {
+    pub fn write_run(&self, status: AnalysisRunStatus, result: Option<String>) -> Result<()> {
         let made = std::fs::read(self.artifact("run.json")?)
             .ok()
-            .and_then(|bytes| {
-                basecraft_protocol::records::decode::<basecraft_protocol::records::AnalysisRun>(
-                    &bytes,
-                )
-                .ok()
-            });
+            .and_then(|bytes| basecraft_protocol::records::decode::<AnalysisRun>(&bytes).ok());
         let (process_instance, source) =
             made.map_or((None, None), |m| (m.process_instance, m.source));
-        self.write_run_record(basecraft_protocol::records::AnalysisRun {
+        self.write_run_record(AnalysisRun {
             schema_version: 1,
             id: self.id().into(),
             result,
@@ -210,24 +211,24 @@ impl ArtifactRun {
     /// The `run.json` of a tool run made by this process on `source`, the
     /// file or document it was started on.
     pub fn write_tool_run(&self, result: String, source: Option<&Path>) -> Result<()> {
-        self.write_run_record(basecraft_protocol::records::AnalysisRun {
+        self.write_run_record(AnalysisRun {
             schema_version: 1,
             id: self.id().into(),
             result: Some(result),
-            status: basecraft_protocol::records::AnalysisRunStatus::Prepared,
+            status: AnalysisRunStatus::Prepared,
             outputs: None,
             process_instance: Some(basecraft_platform::process_instance().into()),
             source: source
-                .map(|source| crate::records::input_evidence::relative(&self.directory, source))
+                .map(|source| relative(&self.directory, source))
                 .transpose()?,
             extra: std::collections::BTreeMap::new(),
         })
     }
 
-    fn write_run_record(&self, record: basecraft_protocol::records::AnalysisRun) -> Result<()> {
+    fn write_run_record(&self, record: AnalysisRun) -> Result<()> {
         // Sorted keys, as every run.json has been written.
         let record = serde_json::to_value(record)?;
-        crate::records::input_evidence::write_json(&self.artifact("run.json")?, &record)
+        write_json(&self.artifact("run.json")?, &record)
     }
 
     /// Stream here, close/sync successfully, then publish. Pending data is never
@@ -243,16 +244,12 @@ impl ArtifactRun {
         let source = self.staging(name)?;
         let metadata = std::fs::symlink_metadata(&source)?;
         if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(invalid("staged artifact must be an ordinary file"));
+            return Err(unsupported("staged artifact must be an ordinary file"));
         }
         basecraft_platform::files::sync_file(&source)?;
         let destination = self.artifact(name)?;
         std::fs::hard_link(&source, &destination)?;
-        basecraft_platform::files::sync_directory(
-            destination
-                .parent()
-                .ok_or_else(|| invalid("artifact has no parent"))?,
-        )?;
+        basecraft_platform::files::sync_directory(&self.directory)?;
         // Keep the pending hardlink if cleanup fails; publication already succeeded.
         let _ = std::fs::remove_file(source);
         Ok(destination)
@@ -299,7 +296,7 @@ impl ArtifactRun {
             && store.file_name().is_some_and(|n| n == "analyses-v1")
         {
             Self::validate_store(store)?;
-            let input = crate::records::input_evidence::read_input(&parent)?;
+            let input = read_input(&parent)?;
             if input
                 .extra
                 .get("species_result")
@@ -312,7 +309,7 @@ impl ArtifactRun {
         let absolute = parent.join(
             result
                 .file_name()
-                .ok_or_else(|| invalid("result filename missing"))?,
+                .ok_or_else(|| Error::NoFileName(result.into()))?,
         );
         let base = records_base(project, &absolute)?;
         let relative = absolute
@@ -331,36 +328,36 @@ impl ArtifactRun {
             }
             Err(error) => return Err(error.into()),
             Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
-                return Err(invalid("unsafe result binding"));
+                return Err(damaged(binding, "unsafe result binding"));
             }
             Ok(_) => {}
         }
         if std::fs::symlink_metadata(&hidden)?.file_type().is_symlink() {
-            return Err(invalid("hidden analysis directory is a symlink"));
+            return Err(damaged(hidden, "hidden analysis directory is a symlink"));
         }
         Self::validate_store(&store)?;
         for directory in [store.join("bindings"), store.join("runs")] {
-            let metadata = directory.symlink_metadata()?;
-            if !metadata.is_dir() || metadata.file_type().is_symlink() {
-                return Err(invalid("unsafe analysis binding namespace"));
-            }
+            ordinary_folder(&directory, "unsafe analysis binding namespace")?;
         }
-        let bound: basecraft_protocol::records::ResultBinding =
-            basecraft_protocol::records::decode(&crate::records::provenance::read_record(
-                &binding,
-            )?)?;
-        if bound.schema_version != 1 || Some(bound.result.as_str()) != relative.to_str() {
-            return Err(invalid("unsupported or mismatched result binding"));
+        let bound: ResultBinding = basecraft_protocol::records::decode(
+            &crate::records::provenance::read_record(&binding)?,
+        )
+        .map_err(|e| damaged(&binding, e.to_string()))?;
+        if bound.schema_version != 1 {
+            return Err(unsupported("unsupported result binding"));
+        }
+        if Some(bound.result.as_str()) != relative.to_str() || component(&bound.run).is_err() {
+            return Err(damaged(&binding, "mismatched result binding"));
         }
         if expected_hash.is_some_and(|hash| bound.result_hash != hash) {
-            return Err(invalid(
-                "result contents differ from the hidden binding; metadata was not applied",
+            return Err(Error::Outdated(
+                "result contents differ from the hidden binding; metadata was not applied".into(),
             ));
         }
-        component(&bound.run)?;
         // A run that is gone, or whose folder moved away, leaves no binding.
         let missing = || match expected_hash {
-            Some(_) => Err(invalid(
+            Some(_) => Err(damaged(
+                &binding,
                 "bound analysis run is missing; metadata was not applied",
             )),
             None => Ok(None),
@@ -372,7 +369,7 @@ impl ArtifactRun {
                     .components()
                     .any(|part| !matches!(part, Component::Normal(_) | Component::ParentDir))
                 {
-                    return Err(invalid("unsafe result binding home"));
+                    return Err(damaged(&binding, "unsafe result binding home"));
                 }
                 let Ok(folder) = base.join(home).canonicalize() else {
                     return missing();
@@ -395,10 +392,7 @@ impl ArtifactRun {
         if !run.exists() {
             return missing();
         }
-        let metadata = run.symlink_metadata()?;
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(invalid("unsafe analysis run"));
-        }
+        ordinary_folder(&run, "unsafe analysis run")?;
         Ok(Some(run))
     }
 
@@ -429,7 +423,7 @@ impl ArtifactRun {
         Self::existing(run)?.bind(Some(project), result, &hash)?;
         let name = result
             .file_name()
-            .ok_or_else(|| invalid("result filename missing"))?;
+            .ok_or_else(|| Error::NoFileName(result.into()))?;
         let key = basecraft_io::hash_bytes(name.as_encoded_bytes());
         let folder = result.parent().unwrap_or(Path::new(".")).canonicalize()?;
         std::fs::remove_file(
@@ -469,17 +463,11 @@ impl ArtifactRun {
         result: &Path,
         hash: &str,
     ) -> Result<()> {
-        let parent = result
-            .parent()
-            .ok_or_else(|| invalid("result parent missing"))?
-            .canonicalize()?;
-        let absolute = parent.join(
-            result
-                .file_name()
-                .ok_or_else(|| invalid("result filename missing"))?,
-        );
+        let no_file = || Error::NoFileName(result.into());
+        let parent = result.parent().ok_or_else(no_file)?.canonicalize()?;
+        let absolute = parent.join(result.file_name().ok_or_else(no_file)?);
         if !absolute.starts_with(&self.working_directory) {
-            return Err(invalid(
+            return Err(unsupported(
                 "binding result lies outside store working directory",
             ));
         }
@@ -488,32 +476,28 @@ impl ArtifactRun {
             .strip_prefix(&base)
             .map_err(|_| invalid("binding result lies outside its records folder"))?;
         let (store, home) = if base == self.working_directory {
-            let store = self.directory.parent().and_then(Path::parent);
-            (
-                store.ok_or_else(|| invalid("run has no store"))?.into(),
-                None,
-            )
+            (self.store().into(), None)
         } else {
             if project.is_some_and(|project| base == project.root())
                 && !self.working_directory.starts_with(&base)
             {
-                return Err(invalid("the run lies outside the project (rule 2.5)"));
+                return Err(unsupported("the run lies outside the project (rule 2.5)"));
             }
-            let home = crate::records::input_evidence::relative(&base, &self.working_directory)?;
+            let home = relative(&base, &self.working_directory)?;
             (Self::store_at(&base)?, Some(home))
         };
         directory(&store.join("bindings"))?;
         let key = basecraft_io::hash_bytes(name.as_os_str().as_encoded_bytes());
-        crate::records::input_evidence::write_json(
+        write_json(
             &store.join("bindings").join(key.trim_start_matches("b3:")),
             // As a value, so its keys are written sorted.
-            &serde_json::to_value(basecraft_protocol::records::ResultBinding {
+            &serde_json::to_value(ResultBinding {
                 schema_version: 1,
                 run: self.id.clone(),
                 home,
                 result: name
                     .to_str()
-                    .ok_or_else(|| invalid("result filename is not UTF-8"))?
+                    .ok_or_else(|| unsupported("result filename is not UTF-8"))?
                     .into(),
                 result_hash: hash.into(),
                 extra: BTreeMap::new(),
@@ -568,7 +552,7 @@ pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>
     ArtifactRun::validate_store(&store)?;
     for (index, entry) in std::fs::read_dir(store.join("runs"))?.enumerate() {
         if index >= 4096 {
-            return Err(invalid("replay analysis-store run limit exceeded"));
+            return Err(limit("runs in an analysis store", 4096));
         }
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -578,15 +562,13 @@ pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>
         if !run.join("input.json").is_file() {
             continue;
         }
-        let input = crate::records::input_evidence::read_input(&run)?;
+        let input = read_input(&run)?;
         // A delegating ledger is also Preserved but holds no bytes; keep looking.
-        let retained = if input.state == basecraft_protocol::input_records::EvidenceState::Preserved
+        let retained = if input.state == EvidenceState::Preserved
             && input.source.as_ref().is_some_and(|r| r.hash == hash)
         {
             run.join("preserved-input")
-        } else if input.state == basecraft_protocol::input_records::EvidenceState::Generated
-            && input.submitted_hash == hash
-        {
+        } else if input.state == EvidenceState::Generated && input.submitted_hash == hash {
             match submitted_input(&run) {
                 Some(path) => path,
                 None => continue,
@@ -607,7 +589,9 @@ impl ArtifactRun {
         let source = self.staging(name)?;
         let metadata = source.symlink_metadata()?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(invalid("staged collection is not an ordinary directory"));
+            return Err(unsupported(
+                "staged collection is not an ordinary directory",
+            ));
         }
         let destination = self.artifact(name)?;
         basecraft_platform::atomic::rename_noreplace(&source, &destination)?;
@@ -629,7 +613,7 @@ pub(crate) fn publish_delimitation(
     placement: &crate::documents::WritePublication,
 ) -> Result<()> {
     if let Some(run) = new_run {
-        let input = crate::records::input_evidence::SubmittedInput {
+        let input = SubmittedInput {
             schema_version: 1,
             source: None,
             submitted_hash: main_hash.to_owned(),
@@ -646,9 +630,9 @@ pub(crate) fn publish_delimitation(
             std::io::copy(&mut std::fs::File::open(target)?, w)?;
             Ok(())
         })?;
-        crate::records::input_evidence::write_input(run.directory(), &input)?;
+        write_input(run.directory(), &input)?;
         run.write_run(
-            basecraft_protocol::records::AnalysisRunStatus::Saved,
+            AnalysisRunStatus::Saved,
             target
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -657,8 +641,8 @@ pub(crate) fn publish_delimitation(
         placement.register(run)?;
         run.bind(project, target, main_hash)?;
     }
-    if let Some(run) = crate::records::analysis_store::ArtifactRun::for_result(project, target)? {
-        let mut input = crate::records::input_evidence::read_input(&run)?;
+    if let Some(run) = ArtifactRun::for_result(project, target)? {
+        let mut input = read_input(&run)?;
         let mut upstream = input.upstream.clone();
         for dependency in crate::delimitation::dependencies(project, work)? {
             let dependency = dependency.canonicalize()?;
@@ -667,11 +651,7 @@ pub(crate) fn publish_delimitation(
             }
             let (publication, hash) = crate::records::provenance::latest_record(&dependency)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
-                bundle: (crate::records::input_evidence::relative(
-                    &placement.logical(&run)?,
-                    &dependency,
-                )?)
-                .into(),
+                bundle: (relative(&placement.logical(&run)?, &dependency)?).into(),
                 id: publication.id,
                 hash,
             };
@@ -682,7 +662,7 @@ pub(crate) fn publish_delimitation(
         if !upstream.is_empty() {
             input.upstream = upstream;
         }
-        crate::records::input_evidence::write_input(&run, &input)?;
+        write_input(&run, &input)?;
     }
     Ok(())
 }

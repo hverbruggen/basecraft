@@ -165,8 +165,6 @@ pub mod qobject {
             names: &QString,
         );
         #[qinvokable]
-        fn request(self: Pin<&mut DocumentOpens>, path: &QString) -> QString;
-        #[qinvokable]
         fn start(self: Pin<&mut DocumentOpens>, token: &QString);
         #[qinvokable]
         unsafe fn install(
@@ -348,6 +346,17 @@ impl qobject::DocumentOpens {
     /// tab for the views that open themselves (`view`), or name the project
     /// dialog.
     fn open(mut self: Pin<&mut Self>, path: &QString, on_its_own: bool) -> QString {
+        let undelivered: Vec<_> = self
+            .rust()
+            .opens
+            .requests
+            .iter()
+            .filter(|(_, request)| request.cancelled.load(std::sync::atomic::Ordering::Acquire))
+            .map(|(&id, _)| id)
+            .collect();
+        for id in undelivered {
+            self.as_mut().reject(id, &OpenError::Queue);
+        }
         let text = path.to_string();
         let worker = crate::document_open::eligible(&text);
         let kind = if worker {
@@ -742,17 +751,6 @@ impl qobject::DocumentOpens {
     }
 
     fn request(mut self: Pin<&mut Self>, path: &QString) -> QString {
-        let undelivered: Vec<_> = self
-            .rust()
-            .opens
-            .requests
-            .iter()
-            .filter(|(_, request)| request.cancelled.load(std::sync::atomic::Ordering::Acquire))
-            .map(|(&id, _)| id)
-            .collect();
-        for id in undelivered {
-            self.as_mut().reject(id, &OpenError::Queue);
-        }
         match self.as_mut().rust_mut().opens.begin(path.to_string()) {
             Ok((id, _)) => QString::from(id.to_string()),
             Err(_) => QString::default(),

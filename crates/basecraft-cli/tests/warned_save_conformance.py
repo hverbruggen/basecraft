@@ -147,7 +147,7 @@ with Session(root, writes=True) as session:
     blocked = Path(fixture["known"]["preservation"]) / "preserved-input"
     blocked.mkdir()
     check = session.save_check(doc)
-    refuses(lambda: session.save(doc, decision=decision(check, "preserve_copy")), "invalid_arguments")
+    refuses(lambda: session.save(doc, decision=decision(check, "preserve_copy")), "damaged")
     assert path.read_bytes() == original
     refuses(lambda: session.save(doc, decision=decision(check, "preserve_copy")), "save_decision_stale")
     blocked.rmdir()
@@ -210,7 +210,7 @@ blocked = Path(fixture["known"]["cli-preservation"]) / "preserved-input"
 blocked.mkdir()
 out = cli("edit", path, json.dumps(operation), "--acknowledge-incomplete-evidence",
           "--save-known-policy", "preserve_copy", success=False)
-assert json.loads(out.stderr)["errors"][0]["code"] == "invalid_arguments" and path.read_bytes() == original
+assert json.loads(out.stderr)["errors"][0]["code"] == "damaged" and path.read_bytes() == original
 blocked.rmdir()
 
 # CLI creation retains its original no-overwrite route under explicit consent.
