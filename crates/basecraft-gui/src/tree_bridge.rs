@@ -986,7 +986,7 @@ impl qobject::TreeController {
                     request_key: None,
                     target: None,
                 };
-                let mut jobs = JobManager::default().with_task_cancellation();
+                let mut jobs = JobManager::default();
                 let accepted = jobs
                     .submit_in_session(&registry, request, policy, "GUI", session)
                     .map_err(|e| e.to_string())?;
@@ -1126,21 +1126,6 @@ impl qobject::TreeController {
             return Err(crate::document_open::OpenError::StaleIdentity);
         }
         self.install_opened(candidate)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn open_identity(&self) -> Option<(String, DocId, u64, u64)> {
-        let session = self.rust().session.as_ref()?;
-        let doc = self.rust().doc?;
-        if !session.is_open(doc) {
-            return None;
-        }
-        Some((
-            session.id().into(),
-            doc,
-            session.generation(doc).unwrap(),
-            session.revision(doc).unwrap(),
-        ))
     }
 
     pub(crate) fn install_opened(

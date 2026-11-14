@@ -581,17 +581,6 @@ impl Session {
         })
     }
 
-    /// Publish an analysis against the evidence frozen when its job was submitted.
-    pub fn publish_analysis_snapshot(
-        &self,
-        id: DocId,
-        target: &Path,
-        inputs: &[(String, String)],
-        snapshot: &crate::records::DocumentRecord,
-    ) -> Result<()> {
-        self.history(id)?.analysis(target, inputs, snapshot)
-    }
-
     /// Add a captured input revision and its producing activity to an
     /// operation's existing inventory.
     pub fn complete_operation_publication(

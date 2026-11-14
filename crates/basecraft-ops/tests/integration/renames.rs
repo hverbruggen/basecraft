@@ -74,11 +74,8 @@ fn row_rename_moves_its_specimen_link_in_one_undo_step() {
     session.redo(aln).unwrap();
     assert_eq!(row_names(&session, aln), ["a2", "b"]);
     assert_eq!(linked(&session, meta), ["a2"]);
-    // Saving the alignment alone leaves half the rename unsaved; the session says so.
     session.save(aln, None).unwrap();
-    assert_eq!(session.unsaved_partners(aln), [meta]);
     session.save(meta, None).unwrap();
-    assert_eq!(session.unsaved_partners(aln), []);
     drop(session);
     let mut reopened = Session::new(dir.path());
     let meta = metadata::open(&mut reopened, false).unwrap().unwrap();

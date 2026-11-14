@@ -101,7 +101,6 @@ impl PreparedWrite {
                 .chain(self.intent.iter().map(|(_, file)| file))
                 .map(|file| {
                     scope.spawn(move || {
-                        #[cfg(feature = "test-counters")]
                         basecraft_io::counters::record_sync_all();
                         file.as_file().sync_all()
                     })
@@ -334,7 +333,6 @@ pub(crate) trait Document {
     ) -> Result<Option<crate::records::links::PreparedLinks>> {
         Ok(None)
     }
-    #[allow(dead_code)] // Recovery checkpoints in lane open use this immediate writer.
     fn write(
         &self,
         project: Option<&crate::project::Project>,

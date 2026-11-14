@@ -137,8 +137,6 @@ pub(crate) struct Candidate {
     pub display_tree: Option<Result<DisplayTree, String>>,
     generation: u64,
     revision: u64,
-    #[cfg(all(test, feature = "test-counters"))]
-    pub reads: basecraft_io::counters::Counters,
 }
 impl Candidate {
     /// Open in the window's chosen project.
@@ -154,8 +152,6 @@ impl Candidate {
         if cancelled.load(Ordering::Acquire) {
             return Err(OpenError::Cancelled);
         }
-        #[cfg(all(test, feature = "test-counters"))]
-        basecraft_io::counters::reset();
         let path = PathBuf::from(path);
         // The project is the folder the user chose; opening never changes it.
         let root = project.as_ref().map_or_else(
@@ -205,8 +201,6 @@ impl Candidate {
             display_tree,
             generation,
             revision,
-            #[cfg(all(test, feature = "test-counters"))]
-            reads: basecraft_io::counters::snapshot(),
         })
     }
     pub fn check(&self, expected: Kind) -> Result<(), OpenError> {

@@ -181,23 +181,11 @@ impl SharedBuffer {
         self.len == 0
     }
 
-    /// Wrap a buffer received from another process.
-    #[cfg(unix)]
-    pub fn from_fd(fd: OwnedFd) -> io::Result<Self> {
-        let len = File::from(fd.try_clone()?).metadata()?.len();
-        Ok(Self {
-            fd: File::from(fd),
-            len,
-        })
-    }
-
     /// Map the buffer read-only.
     pub fn map(&self) -> io::Result<memmap2::Mmap> {
         // SAFETY: buffers we create are sealed against writes and size
         // changes before anyone maps them, so the mapping can't change or
-        // shrink underneath us. A buffer received from a plugin may not be
-        // sealed; plugins are trusted not to resize what they send, and the
-        // protocol requires them to seal.
+        // shrink underneath us.
         // macOS additionally relies on cooperative same-user processes not
         // retaining a writable handle before the snapshot is unlinked.
         unsafe { memmap2::Mmap::map(&self.fd) }

@@ -987,21 +987,6 @@ impl qobject::GenomeController {
         self.install_opened(candidate)
     }
 
-    #[cfg(test)]
-    pub(crate) fn open_identity(&self) -> Option<(String, DocId, u64, u64)> {
-        let session = self.rust().session.as_ref()?;
-        let doc = self.rust().doc?;
-        if !session.is_open(doc) {
-            return None;
-        }
-        Some((
-            session.id().into(),
-            doc,
-            session.generation(doc).unwrap(),
-            session.revision(doc).unwrap(),
-        ))
-    }
-
     pub(crate) fn install_opened(
         mut self: Pin<&mut Self>,
         candidate: crate::document_open::Candidate,
@@ -1881,9 +1866,7 @@ impl qobject::GenomeController {
                 request_key: None,
             };
             let policy = SessionPolicy::new(session.root(), true).map_err(|e| e.to_string())?;
-            let mut jobs = JobManager::default()
-                .with_task_cancellation()
-                .skipping_known_features();
+            let mut jobs = JobManager::default().skipping_known_features();
             let accepted = jobs
                 .submit_in_session(&registry, request, policy, "GUI", session)
                 .map_err(|e| e.to_string())?;

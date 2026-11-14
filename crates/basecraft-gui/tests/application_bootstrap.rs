@@ -54,6 +54,8 @@ mod jobs;
 mod metadata_bridge;
 #[cfg(feature = "test-counters")]
 mod open_argv;
+#[cfg(feature = "test-counters")]
+mod open_hooks;
 #[path = "../src/operations_bridge.rs"]
 mod operations_bridge;
 #[path = "../src/plugins.rs"]
@@ -399,7 +401,7 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
         &mut std::fs::File::create(basecraft_ops::files::companion_path(None, &workspace)).unwrap(),
     )
     .unwrap();
-    app_bridge::barriers::configure(
+    open_hooks::hold(
         folder
             .path()
             .join("pending.afa")
@@ -514,7 +516,7 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
             "all live receivers checked: {diagnostic}"
         );
     }
-    app_bridge::testing::take();
+    open_hooks::take_admissions();
     println!(
         "Real Main linked taxa: directions, lifecycle, clear, identity, focus and unchanged files passed"
     );
@@ -600,6 +602,8 @@ fn release_check_cancels_at_quit() -> ! {
 }
 
 fn main() {
+    #[cfg(feature = "test-counters")]
+    open_hooks::install();
     if std::env::args().nth(1).as_deref() == Some("--app-starts") {
         application_starts_offscreen_and_draws_its_window();
         println!("The application started offscreen and drew its window");
@@ -786,7 +790,7 @@ fn main() {
             .load_data(&QByteArray::from(&source), &QUrl::default());
         assert_eq!(app.as_mut().exec(), 0, "real shell open-dispatch harness");
         let gui = basecraft_io::counters::snapshot();
-        let admissions = app_bridge::testing::take();
+        let admissions = open_hooks::take_admissions();
         assert_eq!(
             admissions.len(),
             3,
@@ -881,7 +885,7 @@ fn main() {
         }
         // The last ready sibling acknowledges on the GUI callback that opens consent.
         // Releasing A here cannot deliver its queued failure until that callback returns.
-        app_bridge::barriers::configure(
+        open_hooks::hold(
             folder
                 .path()
                 .join("missing.gb")
@@ -916,7 +920,7 @@ fn main() {
             .load_data(&QByteArray::from(&source), &QUrl::default());
         assert_eq!(app.as_mut().exec(), 0, "real consent {scenario}");
         assert_eq!(
-            app_bridge::testing::take().len(),
+            open_hooks::take_admissions().len(),
             if scenario == "quit-batch" { 3 } else { 2 }
         );
         assert_eq!(
@@ -975,8 +979,8 @@ fn main() {
                 .join("sequence.gb")
                 .to_string_lossy()
                 .into_owned();
-            app_bridge::faults::set(path.clone(), app_bridge::faults::Fault::DoubleQueue);
-            app_bridge::barriers::configure(path, String::new());
+            open_hooks::fail(path.clone(), open_hooks::Fault::DoubleQueue);
+            open_hooks::hold(path, String::new());
         }
         let source = include_str!("fixtures/open-boundaries.qml")
             .replace(
@@ -996,11 +1000,11 @@ fn main() {
             .pin_mut()
             .load_data(&QByteArray::from(&source), &QUrl::default());
         if scenario.starts_with("double-queue") {
-            app_bridge::barriers::release_and_wait();
+            open_hooks::release_and_wait();
         }
         assert_eq!(app.as_mut().exec(), 0, "real lifecycle boundary {scenario}");
         assert_eq!(
-            app_bridge::testing::take().len(),
+            open_hooks::take_admissions().len(),
             if scenario.starts_with("double-queue") {
                 1
             } else {
@@ -1054,12 +1058,12 @@ fn main() {
             std::fs::write(folder.path().join("unknown.data"), "unsupported").unwrap();
         }
         if let Some(fault) = match scenario {
-            "fail-spawn" => Some(app_bridge::faults::Fault::Spawn),
-            "fail-worker" => Some(app_bridge::faults::Fault::Worker),
-            "fail-queue" => Some(app_bridge::faults::Fault::Queue),
+            "fail-spawn" => Some(open_hooks::Fault::Spawn),
+            "fail-worker" => Some(open_hooks::Fault::Worker),
+            "fail-queue" => Some(open_hooks::Fault::Queue),
             _ => None,
         } {
-            app_bridge::faults::set(
+            open_hooks::fail(
                 folder
                     .path()
                     .join("sequence.gb")
@@ -1069,7 +1073,7 @@ fn main() {
             );
         }
         if matches!(scenario, "reorder" | "cancel-reopen" | "fail-construction") {
-            app_bridge::barriers::configure(
+            open_hooks::hold(
                 folder
                     .path()
                     .join("sequence.gb")
@@ -1100,7 +1104,7 @@ fn main() {
             .pin_mut()
             .load_data(&QByteArray::from(&source), &QUrl::default());
         assert_eq!(app.as_mut().exec(), 0, "real shell lifecycle {scenario}");
-        let admissions = app_bridge::testing::take();
+        let admissions = open_hooks::take_admissions();
         assert_eq!(
             admissions.len(),
             if scenario == "legacy" {
@@ -1128,7 +1132,7 @@ fn main() {
             &path,
         )
         .unwrap();
-        app_bridge::barriers::configure(path.to_string_lossy().into_owned(), String::new());
+        open_hooks::hold(path.to_string_lossy().into_owned(), String::new());
         let mut engine = QQmlApplicationEngine::new();
         engine
             .pin_mut()
@@ -1142,9 +1146,9 @@ fn main() {
             &QUrl::default(),
         );
         drop(engine);
-        app_bridge::barriers::release_and_wait();
+        open_hooks::release_and_wait();
         assert!(
-            app_bridge::testing::take().is_empty(),
+            open_hooks::take_admissions().is_empty(),
             "destroyed shell installed a late candidate"
         );
         println!(
