@@ -168,6 +168,8 @@ fn main() {
         "qml/SubmissionDialog.qml",
         "qml/SubmitterDialog.qml",
     ]))
+    // cxx-qt watches its include root; the default, the crate folder, reran this on any edit.
+    .crate_include_root(Some("cpp".into()))
     .qrc("icons.qrc")
     .qrc("controls.qrc")
     .qt_module("Quick")
