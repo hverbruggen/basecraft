@@ -823,7 +823,6 @@ impl qobject::DocumentOpens {
                     let reject = move |this: Pin<&mut Self>| this.reject(id, &OpenError::Queue);
                     let _ = hooks.deliver(&path, &thread, Box::new(reject));
                 }
-                hooks.finished(&path);
             }
         };
         if let Err(error) = hooks.spawn(&path, Box::new(work)) {
@@ -944,8 +943,10 @@ impl qobject::DocumentOpens {
 
     fn retire(mut self: Pin<&mut Self>, value: &QString) {
         if let Some(id) = token(value) {
-            if let Some(request) = self.rust().opens.requests.get(&id) {
-                open_hooks().retired(&request.path);
+            if let Some(hooks) = OPEN_HOOKS.get()
+                && let Some(request) = self.rust().opens.requests.get(&id)
+            {
+                hooks.retired(&request.path);
             }
             self.as_mut().rust_mut().opens.retire(id);
         }
@@ -963,7 +964,8 @@ type Delivery = Box<dyn FnOnce(Pin<&mut qobject::DocumentOpens>) + Send>;
 /// The steps of a document open that a test can block or fail. The window
 /// keeps the defaults; the bootstrap test sets its own in `OPEN_HOOKS`.
 pub(crate) trait OpenHooks: Sync {
-    /// Start the worker that reads the file.
+    /// Start the worker that reads the file. The worker ends once it has
+    /// handed its result over.
     fn spawn(&self, _path: &str, work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
         crate::jobs::spawn("document-open", work)
     }
@@ -979,8 +981,6 @@ pub(crate) trait OpenHooks: Sync {
     ) -> Result<(), cxx_qt::ThreadingQueueError> {
         thread.queue(call)
     }
-    /// On the worker, once it has handed its result over.
-    fn finished(&self, _path: &str) {}
     /// A read document was installed in its editor.
     fn installed(&self, _candidate: &Candidate) {}
     /// The editor acknowledged the document.

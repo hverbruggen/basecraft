@@ -131,7 +131,13 @@ impl OpenHooks for TestOpens {
         if self.take_fault(path, Fault::Spawn) {
             return Err(std::io::Error::other("injected spawn failure"));
         }
-        crate::jobs::spawn("document-open", work)
+        let path = path.to_owned();
+        crate::jobs::spawn("document-open", move || {
+            work();
+            if let Some((_, finished)) = HOOKS.held(|held| held.path == path) {
+                finished.raise();
+            }
+        })
     }
 
     fn worker(&self, path: &str) {
@@ -175,12 +181,6 @@ impl OpenHooks for TestOpens {
             return Err(cxx_qt::ThreadingQueueError::InvokeMethodFailed);
         }
         thread.queue(call)
-    }
-
-    fn finished(&self, path: &str) {
-        if let Some((_, finished)) = self.held(|held| held.path == path) {
-            finished.raise();
-        }
     }
 
     fn installed(&self, candidate: &Candidate) {
