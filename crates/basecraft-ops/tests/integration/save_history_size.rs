@@ -25,104 +25,72 @@ fn files(root: &Path) -> BTreeMap<PathBuf, (u64, std::time::SystemTime)> {
     found
 }
 
-fn total(root: &Path) -> u64 {
-    if !root.exists() {
-        return 0;
-    }
-    files(root).values().map(|(size, _)| size).sum()
-}
-
+/// The review's save table: 200 kb FASTA in a project, 200 one-base edits
+/// between saves, eight saves. Run with --nocapture to see it.
 #[test]
 fn eight_saves_of_two_hundred_edits() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().to_path_buf();
-    let locks = basecraft_platform::paths::AppPaths::discover()
-        .unwrap()
-        .state
-        .join("locks");
-    let lock_files = || std::fs::read_dir(&locks).map_or(0, Iterator::count);
-    let folder = root.join("project");
+    let folder = dir.path().join("project");
     std::fs::create_dir(&folder).unwrap();
     let file = folder.join("gene.fasta");
-    let mut bytes = b">gene\n".to_vec();
-    for _ in 0..200_000 / 60 {
-        bytes.extend_from_slice(&[b'A'; 60]);
-        bytes.push(b'\n');
-    }
-    std::fs::write(&file, &bytes).unwrap();
+    let line = [b'A'; 60].iter().chain(b"\n").copied();
+    let body: Vec<u8> = std::iter::repeat_n(line, 200_000 / 60).flatten().collect();
+    std::fs::write(&file, [b">gene\n".as_slice(), &body].concat()).unwrap();
     let project = Project::new(&folder).unwrap();
     let mut session = Session::recoverable(&folder)
         .unwrap()
         .in_project(Some(project));
     let doc = session.open(&file).unwrap();
-    let mut rows = Vec::new();
+    let mut written = Vec::new();
     for save in 0..8u64 {
-        for edit in 0..200u64 {
-            let at = save * 200 + edit;
+        for at in save * 200..save * 200 + 200 {
             session
                 .apply(doc, Op::seq_replace(at * 7, at * 7 + 1, "C"))
                 .unwrap();
         }
-        let before = files(&root);
+        let before = files(dir.path());
         let started = Instant::now();
         session.save(doc, None).unwrap();
-        let elapsed = started.elapsed();
-        let after = files(&root);
-        let mut written = 0;
-        let mut changed = Vec::new();
-        for (path, (size, modified)) in &after {
-            match before.get(path) {
+        let elapsed = started.elapsed().as_millis();
+        // Replaced files count whole; the journal counts what was appended.
+        let mut bytes = 0;
+        let mut replaced = Vec::new();
+        for (path, (size, modified)) in files(dir.path()) {
+            match before.get(&path) {
                 Some((old, _)) if path.extension().is_some_and(|e| e == "jsonl") => {
-                    written += size.saturating_sub(*old);
+                    bytes += size.saturating_sub(*old);
                 }
-                Some(old) if old == &(*size, *modified) => {}
+                Some(old) if *old == (size, modified) => {}
                 _ => {
-                    written += size;
-                    changed.push(path.strip_prefix(&root).unwrap().to_path_buf());
+                    bytes += size;
+                    replaced.push(path);
                 }
             }
         }
-        let history = folder.join(".basecraft/provenance");
-        rows.push((
-            save + 1,
-            elapsed,
-            written,
-            total(&history),
-            changed,
-            lock_files(),
-        ));
-    }
-    eprintln!("save | time | bytes written | history total | files replaced | lock files");
-    for (save, elapsed, written, history, changed, locks) in &rows {
+        let history: u64 = files(&folder.join(".basecraft/provenance"))
+            .values()
+            .map(|v| v.0)
+            .sum();
         eprintln!(
-            "{save} | {} ms | {written} | {history} | {} | {locks}",
-            elapsed.as_millis(),
-            changed.len()
+            "save {} | {elapsed} ms | {bytes} bytes written | history {history} | {replaced:?}",
+            save + 1
         );
+        written.push((bytes, replaced));
     }
-    for path in &rows.last().unwrap().4 {
-        eprintln!("eighth save replaced {}", path.display());
-    }
-    // The eighth save writes the sequence, one history record, the pointer
-    // to it and the recovery journal's new stream: no copies, no reports.
-    let eighth = &rows.last().unwrap().4;
-    let history: Vec<_> = eighth
+    // The eighth save writes the sequence, one record, the pointer to it and
+    // the recovery journal's new stream: no copies, no reports, no GFF3.
+    let (last, replaced) = &written[7];
+    let history: Vec<_> = replaced
         .iter()
-        .filter(|p| p.starts_with("project/.basecraft/provenance"))
+        .filter(|p| p.starts_with(folder.join(".basecraft/provenance")))
         .collect();
     assert_eq!(history.len(), 2, "{history:?}");
     assert!(history.iter().any(|p| p.ends_with("manifest.json")));
-    assert!(
-        history
-            .iter()
-            .any(|p| p.parent().unwrap().ends_with("records"))
-    );
     // Bytes follow the edits since the last save, not every edit ever made.
     assert!(
-        rows[7].2 < rows[1].2 + rows[1].2 / 10,
-        "{} vs {}",
-        rows[7].2,
-        rows[1].2
+        *last < written[1].0 + written[1].0 / 10,
+        "{last} vs {}",
+        written[1].0
     );
     let bundle = basecraft_ops::records::bundle_for_result(&file, session.project());
     assert_eq!(

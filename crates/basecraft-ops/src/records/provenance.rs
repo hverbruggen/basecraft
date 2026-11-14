@@ -126,8 +126,7 @@ pub fn retained_file(
 
 /// Move a run's file to a new file in the project, never replacing one
 /// (D26). The receipt names the file's inode before the move, so a later
-/// repair adopts only the file this run moved. Across file systems the file
-/// is copied to a new file there and the run's file is removed.
+/// repair adopts only the file this run moved.
 pub fn move_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
     let parent = destination
         .parent()
@@ -136,40 +135,18 @@ pub fn move_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) 
         return Err(invalid("member changed before export"));
     }
     write_receipt(receipt, destination, hash, source)?;
-    match basecraft_platform::atomic::rename_noreplace(source, destination) {
-        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
-            let pending = tempfile::Builder::new()
-                .prefix(".basecraft-export-")
-                .tempfile_in(parent)?;
-            std::fs::copy(source, pending.path())?;
-            if basecraft_io::hash_file(pending.path())? != hash {
-                return Err(invalid("member changed during export"));
-            }
-            pending.as_file().sync_all()?;
-            write_receipt(receipt, destination, hash, pending.path())?;
-            no_replace(basecraft_platform::atomic::rename_noreplace(
-                pending.path(),
-                destination,
-            ))?;
-            std::fs::remove_file(source)?;
-        }
-        moved => no_replace(moved)?,
-    }
-    basecraft_platform::files::sync_directory(parent)?;
-    if let Some(folder) = source.parent() {
-        basecraft_platform::files::sync_directory(folder)?;
-    }
-    Ok(())
-}
-
-fn no_replace(renamed: std::io::Result<()>) -> Result<()> {
-    renamed.map_err(|error| {
+    basecraft_platform::atomic::rename_noreplace(source, destination).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             crate::access::AccessError::DestinationExists.into()
         } else {
             crate::Error::from(error)
         }
-    })
+    })?;
+    basecraft_platform::files::sync_directory(parent)?;
+    if let Some(folder) = source.parent() {
+        basecraft_platform::files::sync_directory(folder)?;
+    }
+    Ok(())
 }
 
 /// The receipt of a move: `file` is the file that becomes `destination`.
@@ -516,7 +493,7 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
     // Queue only identities and expected checksums, never parsed publications.
     let mut stack = vec![(current.id.clone(), None, false)];
     let mut scheduled = 1usize;
-    let mut record_bytes = 0u64;
+    let mut record_budget = 128u64 << 20;
     let mut artifact_bytes = 0u64;
     while let Some((id, expected_hash, leaving)) = stack.pop() {
         if leaving {
@@ -535,17 +512,8 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
             }
             continue;
         }
-        record_path(bundle, &id)?;
-        let path = safe_relative(bundle, &format!("records/{id}.json"))?;
-        record_bytes = record_bytes.saturating_add(std::fs::metadata(&path)?.len());
-        if record_bytes > 128 << 20 {
-            return Err(crate::Error::Limit {
-                what: "provenance ancestry record verification".into(),
-                limit: 128 << 20,
-            });
-        }
-        let bytes = read_record(&path)?;
-        let hash = basecraft_io::hash_bytes(&bytes);
+        safe_relative(bundle, &format!("records/{id}.json"))?;
+        let (publication, hash) = read_publication(bundle, &id, &mut record_budget)?;
         if expected_hash
             .as_ref()
             .is_some_and(|expected| *expected != hash)
@@ -553,12 +521,6 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
             issues.push(format!("{id}: ancestor record hash differs"));
         }
         hashes.insert(id.clone(), hash);
-        let publication: Publication = basecraft_protocol::records::decode(&bytes)?;
-        if publication.id != id || publication.schema_version != 1 {
-            return Err(invalid(
-                "unsupported or inconsistent ancestor identity/version",
-            ));
-        }
         if id == current.id && serde_json::to_value(&publication)? != serde_json::to_value(current)?
         {
             issues.push(format!("{id}: immutable publication record differs"));
