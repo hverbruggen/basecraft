@@ -1101,11 +1101,7 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                                     Err(error) => structured(
                                         basecraft_plugin_host::jobs::error_value(
                                             "basecraft.host",
-                                            if error.to_string() == "unknown operation" {
-                                                OperationErrorCode::PluginUnavailable
-                                            } else {
-                                                OperationErrorCode::InvalidArguments
-                                            },
+                                            core_error_code(error.as_ref()),
                                             error.to_string(),
                                         ),
                                         true,

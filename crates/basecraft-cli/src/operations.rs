@@ -73,7 +73,12 @@ pub fn describe(registry: &Registry, operation: &str) -> Result<Value> {
     let op = registry
         .operations
         .get(operation)
-        .ok_or("unknown operation")?;
+        .ok_or_else(|| {
+            basecraft_plugin_host::Error::refused(
+                basecraft_protocol::operation::OperationErrorCode::PluginUnavailable,
+                "unknown operation".into(),
+            )
+        })?;
     Ok(
         json!({"operation":op.id,"descriptor":op.descriptor,"pins":op.pins(&registry.generation),
         "enabled":op.package.enabled,"runtime":"unverified","origin":op.package.origin}),

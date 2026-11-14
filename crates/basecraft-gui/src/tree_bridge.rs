@@ -755,8 +755,17 @@ impl qobject::TreeController {
             } else {
                 Vec::new()
             };
-            let (result, refused) =
-                crate::document_open::applying(session, doc, op, basecraft_ops::renames::apply_op);
+            // A refused tree edit shows only its reason, without the
+            // "invalid operation" prefix the error's text carries.
+            let mut reason = None;
+            let (result, refused) = crate::document_open::applying(session, doc, op, |s, d, o| {
+                basecraft_ops::renames::apply_op(s, d, o).inspect_err(|error| {
+                    if let basecraft_ops::Error::Invalid(text) = error {
+                        reason = Some(text.clone());
+                    }
+                })
+            });
+            let result = result.map_err(|shown| reason.unwrap_or(shown));
             if rooting && result.is_ok() {
                 let after = displaced(session)?;
                 match (&mut r.labels, placing) {
@@ -782,10 +791,6 @@ impl qobject::TreeController {
                 Ok(())
             }
             Err(msg) => {
-                let msg = msg
-                    .strip_prefix("invalid operation: ")
-                    .unwrap_or(&msg)
-                    .to_string();
                 self.as_mut().fail(&msg);
                 Err(msg)
             }
