@@ -6,7 +6,7 @@
 pub(crate) mod analysis_store;
 pub(crate) mod contributions;
 pub(crate) mod document_record;
-pub(crate) mod input_evidence;
+pub(crate) mod run_inputs;
 pub(crate) mod jobs;
 pub(crate) mod links;
 pub(crate) mod provenance;
@@ -16,7 +16,7 @@ pub(crate) mod save_guard;
 
 pub use analysis_store::ArtifactRun;
 pub use document_record::{DocumentRecord, MethodsParagraph, Report, ReportExt};
-pub use input_evidence::{
+pub use run_inputs::{
     AffectedAnalysis, BackgroundWait, EvidenceConflict, InspectionCode, InspectionIssue,
     InspectionRelevance, Mutation, SavePolicy, SubmittedInput, check, check_in, conflicts,
     conflicts_in, link_generated_input, lock, preserve_input, read_input,

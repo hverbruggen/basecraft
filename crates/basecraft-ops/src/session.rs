@@ -180,7 +180,7 @@ pub struct Outcome {
 
 /// Target-save and evidence locks held while writing an export or extract.
 struct DerivedTarget {
-    _evidence: crate::records::input_evidence::SaveLock,
+    _evidence: crate::records::run_inputs::SaveLock,
 }
 
 enum ReplayMode {

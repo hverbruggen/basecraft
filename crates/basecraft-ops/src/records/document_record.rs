@@ -67,12 +67,12 @@ impl DocumentRecord {
         publication.effective_edits = effective;
         publication.withdrawn = withdrawn;
         // Preserve upstream bundles used by the submitted revision for packaging.
-        let mut input = crate::records::input_evidence::read_input(run.directory())?;
+        let mut input = crate::records::run_inputs::read_input(run.directory())?;
         let mut upstream = input.upstream.clone();
         for (bundle, origin) in &self.origins {
             let record = crate::records::provenance::record_path(bundle, &origin.id)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
-                bundle: (crate::records::input_evidence::relative(
+                bundle: (crate::records::run_inputs::relative(
                     run.directory(),
                     &bundle.canonicalize()?,
                 )?)
@@ -86,7 +86,7 @@ impl DocumentRecord {
         }
         if !upstream.is_empty() {
             input.upstream = upstream;
-            crate::records::input_evidence::write_input(run.directory(), &input)?;
+            crate::records::run_inputs::write_input(run.directory(), &input)?;
         }
         crate::records::provenance::publish(run.directory(), &publication)
     }

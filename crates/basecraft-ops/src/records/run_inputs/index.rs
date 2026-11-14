@@ -8,7 +8,11 @@
 //! take the union of every file in a bucket, copies a sync tool made included,
 //! so no writer's entry is lost to another writer or machine. Each store lists
 //! the buckets it is indexed in, so a lost index is noticed and rebuilt.
-use super::{Path, PathBuf, Result, lexical, stamp};
+use super::check::Inspection;
+use super::{InspectionCode, stamp};
+use crate::Result;
+use basecraft_platform::files::lexical;
+use std::path::{Path, PathBuf};
 use basecraft_protocol::records::{AnalysisIndex, IndexedFolders};
 use fs4::fs_std::FileExt;
 use std::collections::{BTreeMap, BTreeSet};
@@ -152,7 +156,7 @@ fn folder(path: &Path) -> Result<()> {
 /// while waiting for anything else. It sits in the shared folder, so writers
 /// with different profiles or user accounts exclude each other too.
 fn lock_beside(path: &Path) -> Result<std::fs::File> {
-    let lock = super::open_lock(path)?;
+    let lock = super::locks::open_lock(path)?;
     lock.lock_exclusive()
         .map_err(|e| crate::Error::Busy(e.to_string()))?;
     Ok(lock)
@@ -376,11 +380,11 @@ fn list_buckets(store: &Path, indexed: &BTreeSet<PathBuf>, replace: bool) -> Res
 }
 
 /// The index files in `bucket`, each with the store it names.
-fn stores_in(bucket: &Path, inspection: &mut super::Inspection) -> Vec<(PathBuf, AnalysisIndex)> {
+fn stores_in(bucket: &Path, inspection: &mut Inspection) -> Vec<(PathBuf, AnalysisIndex)> {
     let found = match copies(bucket, "") {
         Ok(found) => found,
         Err(error) => {
-            inspection.issue(super::InspectionCode::RegistryUnavailable, bucket, error);
+            inspection.issue(InspectionCode::RegistryUnavailable, bucket, error);
             return Vec::new();
         }
     };
@@ -390,7 +394,7 @@ fn stores_in(bucket: &Path, inspection: &mut super::Inspection) -> Vec<(PathBuf,
         match read(&path, |i: &AnalysisIndex| i.schema_version) {
             Ok(index) => indexes.push((lexical(&home.join(&index.store)), index)),
             Err(error) => {
-                inspection.issue(super::InspectionCode::RegistryUnavailable, &path, error);
+                inspection.issue(InspectionCode::RegistryUnavailable, &path, error);
             }
         }
     }
@@ -425,7 +429,7 @@ pub(super) fn select(
     target: &Path,
     absolute: &Path,
     project: Option<&Path>,
-    inspection: &mut super::Inspection,
+    inspection: &mut Inspection,
 ) -> Vec<PathBuf> {
     let linked = basecraft_platform::files::link_count(target).unwrap_or(1) > 1;
     let identity = stamp(target).ok().and_then(|s| Some((s.device?, s.inode?)));
@@ -441,7 +445,7 @@ pub(super) fn select(
     for (home, entry) in places {
         if let Some(reason) = foreign_basecraft(&home) {
             inspection.issue(
-                super::InspectionCode::RegistryUnavailable,
+                InspectionCode::RegistryUnavailable,
                 &home.join(".basecraft"),
                 format!("{reason}; analyses of files here cannot be checked"),
             );
@@ -494,7 +498,7 @@ fn lost(
     bucket: &Path,
     indexes: &[(PathBuf, AnalysisIndex)],
     selected: &mut BTreeSet<PathBuf>,
-    inspection: &mut super::Inspection,
+    inspection: &mut Inspection,
 ) {
     let mut stores = vec![project.join(".basecraft/analyses-v1")];
     let mut scanned = SCANNED
@@ -516,7 +520,7 @@ fn lost(
             }
             Ok(_) => {}
             Err(error) => inspection.issue(
-                super::InspectionCode::RegistryUnavailable,
+                InspectionCode::RegistryUnavailable,
                 &store.join("indexed-folders.json"),
                 error,
             ),
@@ -524,7 +528,7 @@ fn lost(
     }
     if found {
         inspection.issue(
-            super::InspectionCode::RegistryUnavailable,
+            InspectionCode::RegistryUnavailable,
             bucket,
             format!(
                 "the analysis index here is missing; `basecraft records reindex {}` rebuilds it",

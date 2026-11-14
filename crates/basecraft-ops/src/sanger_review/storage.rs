@@ -5,7 +5,7 @@ use crate::{
     Error,
     error::{damaged, invalid},
     records::analysis_store::ArtifactRun,
-    records::input_evidence as inputs,
+    records::run_inputs as inputs,
 };
 use basecraft_docs::sanger::SangerPlacementExt;
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
@@ -56,7 +56,7 @@ fn base(path: &Path) -> crate::Result<PathBuf> {
         Ok(parent) => Ok(parent),
         // Recovery encodes for its final directory before atomic publication.
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(normalized(&std::path::absolute(parent)?))
+            Ok(basecraft_platform::files::lexical(&std::path::absolute(parent)?))
         }
         Err(error) => Err(error.into()),
     }
@@ -922,7 +922,7 @@ fn relocate_stored(
     let parent = base(original)?;
     stored
         .evidence
-        .map_paths(|p| Ok(normalized(&parent.join(p))))?;
+        .map_paths(|p| Ok(basecraft_platform::files::lexical(&parent.join(p))))?;
     for source in &mut stored.evidence.sources {
         let key = &source.path;
         let hash = paths
@@ -975,7 +975,7 @@ fn placement_source_matches(original: &Path, placed: &Path) -> bool {
 }
 
 fn same_file(a: &Path, b: &Path) -> crate::Result<bool> {
-    if normalized(&std::path::absolute(a)?) == normalized(&std::path::absolute(b)?) {
+    if basecraft_platform::files::lexical(&std::path::absolute(a)?) == basecraft_platform::files::lexical(&std::path::absolute(b)?) {
         return Ok(true);
     }
     if let (Ok(a), Ok(b)) = (a.canonicalize(), b.canonicalize())
@@ -996,20 +996,6 @@ fn same_file(a: &Path, b: &Path) -> crate::Result<bool> {
         return Ok(a == b);
     }
     Ok(false)
-}
-
-fn normalized(path: &Path) -> PathBuf {
-    let mut result = PathBuf::new();
-    for part in path.components() {
-        match part {
-            std::path::Component::ParentDir => {
-                result.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => result.push(other.as_os_str()),
-        }
-    }
-    result
 }
 
 pub(crate) fn is_review(path: &Path) -> bool {

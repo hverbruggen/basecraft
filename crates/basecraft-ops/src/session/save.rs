@@ -5,7 +5,7 @@ use super::{SaveDecision, SaveOutcome, Session};
 use crate::error::{changed_on_disk, damaged};
 
 use super::SaveWarning;
-use crate::records::input_evidence::SavePolicy;
+use crate::records::run_inputs::SavePolicy;
 
 type SourceStamps = Vec<(
     std::path::PathBuf,
@@ -37,7 +37,7 @@ impl Session {
         self.save_attempt(
             id,
             path,
-            crate::records::input_evidence::SavePolicy::Cancel,
+            crate::records::run_inputs::SavePolicy::Cancel,
             SaveMode::Replace,
             None,
         )
@@ -50,7 +50,7 @@ impl Session {
         self.save_attempt(
             id,
             None,
-            crate::records::input_evidence::SavePolicy::Cancel,
+            crate::records::run_inputs::SavePolicy::Cancel,
             SaveMode::History,
             None,
         )
@@ -64,7 +64,7 @@ impl Session {
         self.save_attempt(
             id,
             path,
-            crate::records::input_evidence::SavePolicy::Cancel,
+            crate::records::run_inputs::SavePolicy::Cancel,
             SaveMode::NewDestination,
             None,
         )
@@ -154,7 +154,7 @@ impl Session {
 
         // 1. Find and reserve the analyses that may use the target.
         let written = self.written_stores(id, &target.path)?;
-        let mut evidence_lock = crate::records::input_evidence::lock_save(
+        let mut evidence_lock = crate::records::run_inputs::lock_save(
             &target.path,
             &written,
             self.project.as_ref().map(crate::project::Project::root),
@@ -328,7 +328,7 @@ impl Session {
         &mut self,
         id: DocId,
         target: &SaveTarget,
-        evidence: crate::records::input_evidence::EvidenceCheck,
+        evidence: crate::records::run_inputs::EvidenceCheck,
         revision: Option<super::save_consent::TargetRevision>,
         decision: Option<(SaveDecision, bool)>,
         policy: SavePolicy,
@@ -365,7 +365,7 @@ impl Session {
         }
         if decision.is_none() && !recovery && evidence.is_complete() {
             check_source(self)?;
-            crate::records::input_evidence::resolve(&evidence.conflict, policy)?;
+            crate::records::run_inputs::resolve(&evidence.conflict, policy)?;
             return Ok((Vec::new(), None));
         }
         let check = self.save_check_scope(id, &target.path, evidence, revision)?;
@@ -489,7 +489,7 @@ impl Session {
             if review || own {
                 self.docs[id.0].saved_at = Some(self.docs[id.0].mark());
             }
-            let stamp = crate::records::input_evidence::stamp(target)?;
+            let stamp = crate::records::run_inputs::stamp(target)?;
             if own {
                 self.docs[id.0].disk_stamp = stamp.clone();
                 self.wrote_gff(id, target)?;
@@ -538,7 +538,7 @@ impl Session {
             slot.accepted_hashes.retain(|(p, _)| *p != key);
             slot.accepted_hashes.push((key, hash));
         }
-        if main_written && let Ok(stamp) = crate::records::input_evidence::stamp(target) {
+        if main_written && let Ok(stamp) = crate::records::run_inputs::stamp(target) {
             if own {
                 self.docs[id.0].disk_stamp = stamp.clone();
             }
@@ -704,7 +704,7 @@ impl Session {
             .map(|(path, hash)| {
                 Ok(basecraft_protocol::provenance::InputReference {
                     path: path.clone(),
-                    stamp: crate::records::input_evidence::stamp(&self.resolve(path))?,
+                    stamp: crate::records::run_inputs::stamp(&self.resolve(path))?,
                     hash: hash.clone(),
                     extra: std::collections::BTreeMap::default(),
                 })
@@ -760,7 +760,7 @@ impl Session {
     /// open document's own file would discard its accepted revision.
     /// Known-input conflicts are resolved first, under both locks.
     pub(super) fn derived_target(&self, path: &Path) -> Result<DerivedTarget> {
-        let mut evidence = crate::records::input_evidence::lock_save(
+        let mut evidence = crate::records::run_inputs::lock_save(
             path,
             &[],
             self.project.as_ref().map(crate::project::Project::root),
@@ -769,9 +769,9 @@ impl Session {
         if !check.is_complete() {
             return Err(Error::EvidenceCheckIncomplete(Box::new(check)));
         }
-        crate::records::input_evidence::resolve(
+        crate::records::run_inputs::resolve(
             &check.conflict,
-            crate::records::input_evidence::SavePolicy::Cancel,
+            crate::records::run_inputs::SavePolicy::Cancel,
         )?;
         if self
             .docs
@@ -904,7 +904,7 @@ impl Session {
                     .then_some(&slot.disk_stamp)
             });
         if let Some(expected) = expected
-            && crate::records::input_evidence::stamp(target)? != *expected
+            && crate::records::run_inputs::stamp(target)? != *expected
         {
             return Err(changed_on_disk(target));
         }

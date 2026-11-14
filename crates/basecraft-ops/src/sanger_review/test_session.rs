@@ -58,7 +58,7 @@ impl ReviewSession {
     pub(super) fn save_with_policy(
         &mut self,
         path: &Path,
-        policy: crate::records::input_evidence::SavePolicy,
+        policy: crate::records::run_inputs::SavePolicy,
     ) -> crate::Result<()> {
         let check = self.owner.check_save(self.id, Some(path))?;
         self.owner

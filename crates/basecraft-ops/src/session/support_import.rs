@@ -96,7 +96,7 @@ impl Session {
         let mut input_run = None;
         if self.tracked {
             let anchor = self.resolve(self.doc_key(id)?);
-            let ledger = crate::records::input_evidence::reference_input_with_dependencies(
+            let ledger = crate::records::run_inputs::reference_input_with_dependencies(
                 &anchor,
                 &source,
                 &hash,

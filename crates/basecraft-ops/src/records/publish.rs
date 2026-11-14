@@ -63,7 +63,7 @@ impl History<'_> {
     /// they count as recorded events here.
     pub(crate) fn save(&self, target: &Path, save: &LogEntry) -> Result<StagedRecord> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness};
-        let _scope = crate::records::input_evidence::lock_in(self.project)?;
+        let _scope = crate::records::run_inputs::lock_in(self.project)?;
         let bound = self.bound(target)?;
         let bundle = if let Some(hidden) = bound.clone() {
             hidden
@@ -167,17 +167,17 @@ impl History<'_> {
             && previous_bundle != &bundle
             && previous_bundle.join("input.json").is_file()
         {
-            let mut input = crate::records::input_evidence::read_input(previous_bundle)?;
+            let mut input = crate::records::run_inputs::read_input(previous_bundle)?;
             let mut upstream = input.upstream.clone();
             for reference in &mut upstream {
-                reference.bundle = crate::records::input_evidence::relative(
+                reference.bundle = crate::records::run_inputs::relative(
                     &bundle.canonicalize()?,
                     &previous_bundle.join(&reference.bundle).canonicalize()?,
                 )?
                 .into();
             }
             if bundle.join("input.json").is_file() {
-                let current = crate::records::input_evidence::read_input(&bundle)?;
+                let current = crate::records::run_inputs::read_input(&bundle)?;
                 for dependency in &current.upstream {
                     if !upstream.contains(dependency) {
                         upstream.push(dependency.clone());
@@ -188,7 +188,7 @@ impl History<'_> {
                 input.upstream = upstream;
             }
             if input.source.is_some() {
-                input.origin_run = Some(crate::records::input_evidence::relative(
+                input.origin_run = Some(crate::records::run_inputs::relative(
                     &bundle.canonicalize()?,
                     &previous_bundle.canonicalize()?,
                 )?);
@@ -200,7 +200,7 @@ impl History<'_> {
                     Ok(())
                 })?;
             }
-            crate::records::input_evidence::write_input(&bundle, &input)?;
+            crate::records::run_inputs::write_input(&bundle, &input)?;
         }
         let retain =
             |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
@@ -263,7 +263,7 @@ impl History<'_> {
         let mut outputs = Vec::new();
         for (key, hash) in &save.result.hashes {
             let logical_name = if bound.is_some() {
-                crate::records::input_evidence::relative(
+                crate::records::run_inputs::relative(
                     &target.parent().unwrap_or(Path::new(".")).canonicalize()?,
                     &self.root.join(key).canonicalize()?,
                 )?
@@ -382,7 +382,7 @@ impl History<'_> {
         snapshot: &crate::records::document_record::DocumentRecord,
         run: &crate::records::analysis_store::ArtifactRun,
     ) -> Result<()> {
-        let _scope = crate::records::input_evidence::lock_in(self.project)?;
+        let _scope = crate::records::run_inputs::lock_in(self.project)?;
         let activity = self
             .events()
             .filter(|event| event.doc == self.key && event.op.is_run(run.id()))
@@ -404,7 +404,7 @@ impl History<'_> {
         current: impl FnOnce() -> Result<Vec<u8>>,
     ) -> Result<()> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness, InputReference};
-        let _scope = crate::records::input_evidence::lock_in(self.project)?;
+        let _scope = crate::records::run_inputs::lock_in(self.project)?;
         if !self.tracked {
             return Ok(());
         }

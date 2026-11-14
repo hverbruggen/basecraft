@@ -429,7 +429,7 @@ impl WritePublication {
 
     pub(crate) fn register(&self, run: &crate::records::analysis_store::ArtifactRun) -> Result<()> {
         match self {
-            Self::Immediate | Self::Create => crate::records::input_evidence::register(run),
+            Self::Immediate | Self::Create => crate::records::run_inputs::register(run),
             Self::Recovery { stores, .. } => {
                 let mut stores = stores
                     .lock()

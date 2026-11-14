@@ -5,7 +5,7 @@ use super::save::SaveMode;
 pub use super::save_consent::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 use super::save_consent::{PendingSaveCheck, SaveScope, target_revision};
 use super::{DocId, Session};
-use crate::records::input_evidence::{EvidenceCheck, SavePolicy};
+use crate::records::run_inputs::{EvidenceCheck, SavePolicy};
 use crate::{Result, error::invalid};
 
 impl Session {
@@ -151,7 +151,7 @@ impl Session {
 
     /// The analysis check for a save of `target` from this session.
     fn evidence_check(&self, target: &Path) -> Result<EvidenceCheck> {
-        crate::records::input_evidence::check_for(
+        crate::records::run_inputs::check_for(
             target,
             self.project.as_ref().map(crate::project::Project::root),
         )

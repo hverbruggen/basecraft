@@ -1,7 +1,7 @@
 //! Owned bytes shared by trace parsing, evidence registration and tool submission.
 use crate::Result;
 use crate::error::{changed_on_disk, limit};
-use crate::records::input_evidence::stamp;
+use crate::records::run_inputs::stamp;
 use basecraft_protocol::provenance::FileStamp;
 use std::{
     path::{Path, PathBuf},

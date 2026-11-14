@@ -249,7 +249,7 @@ impl Session {
         if !self.tracked || edits.is_empty() {
             return Ok(None);
         }
-        let ledger = crate::records::input_evidence::reference_input_with_dependencies(
+        let ledger = crate::records::run_inputs::reference_input_with_dependencies(
             &self.resolve(self.doc_key(id)?),
             &self.resolve(source),
             hash,

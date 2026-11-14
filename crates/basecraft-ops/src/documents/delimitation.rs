@@ -226,7 +226,7 @@ mod tests {
     fn exchange_companion_and_record_bytes_keep_existing_writers() {
         crate::isolated_profile::isolate!();
         // The Session save boundary holds this lock and prepares registry storage.
-        let _lock = crate::records::input_evidence::lock().unwrap();
+        let _lock = crate::records::run_inputs::lock().unwrap();
         let initial = basecraft_io::spart::parse_text(SPART).unwrap();
         for name in ["copy.spart", "copy.spartxml"] {
             let dir = tempfile::tempdir().unwrap();
@@ -270,7 +270,7 @@ mod tests {
             let retained = crate::records::analysis_store::submitted_input(&run).unwrap();
             assert!(retained.to_string_lossy().contains("submitted.spart"));
             assert_eq!(std::fs::read(retained).unwrap(), main);
-            let input = crate::records::input_evidence::read_input(&run).unwrap();
+            let input = crate::records::run_inputs::read_input(&run).unwrap();
             assert_eq!(input.submitted_hash, hash);
             assert_eq!(input.submitted_size, main.len() as u64);
             assert_eq!(

@@ -950,7 +950,7 @@ mod moved_and_failed_recovery_tests {
 
     #[test]
     fn referenced_review_uses_shared_cancel_preserve_and_break_policy() {
-        use crate::records::input_evidence::{self as inputs, SavePolicy};
+        use crate::records::run_inputs::{self as inputs, SavePolicy};
         // Registered stores must outlive every iteration in this test profile.
         let mut fixtures = Vec::new();
         for policy in [SavePolicy::PreserveCopy, SavePolicy::BreakEvidence] {

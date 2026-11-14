@@ -31,7 +31,7 @@ fn pre_session_refusal_discards_actual_consent() {
                 Some(
                     check
                         .clone()
-                        .decide(crate::records::input_evidence::SavePolicy::Cancel, false)
+                        .decide(crate::records::run_inputs::SavePolicy::Cancel, false)
                 )
             )
             .is_err()
@@ -39,7 +39,7 @@ fn pre_session_refusal_discards_actual_consent() {
     assert!(matches!(
         attempt.advance(
             0,
-            Some(check.decide(crate::records::input_evidence::SavePolicy::Cancel, false))
+            Some(check.decide(crate::records::run_inputs::SavePolicy::Cancel, false))
         ),
         Err(Error::SaveDecisionStale(_))
     ));

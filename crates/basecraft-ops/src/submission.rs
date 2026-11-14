@@ -1340,7 +1340,7 @@ fn verified_reports(
             .as_deref()
             .ok_or_else(|| damaged(run, "validation input has no source path"))?;
         let ledger =
-            crate::records::input_evidence::read_input(&run.join(&evidence.run_directory))?;
+            crate::records::run_inputs::read_input(&run.join(&evidence.run_directory))?;
         if run.join(original).canonicalize()? != current.canonicalize()?
             || evidence.source_hash.as_deref() != Some(expected.as_str())
             || evidence.submitted_hash != expected

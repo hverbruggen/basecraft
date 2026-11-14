@@ -431,17 +431,9 @@ pub fn recorded_request(
         .chain(&mut request.target)
     {
         if let InputReference::File { path } = reference {
-            let mut resolved = PathBuf::new();
-            for part in run.join(&*path).components() {
-                match part {
-                    std::path::Component::ParentDir => {
-                        resolved.pop();
-                    }
-                    std::path::Component::CurDir => {}
-                    part => resolved.push(part),
-                }
-            }
-            *path = resolved.display().to_string();
+            *path = basecraft_platform::files::lexical(&run.join(&*path))
+                .display()
+                .to_string();
         }
     }
     Ok(request)

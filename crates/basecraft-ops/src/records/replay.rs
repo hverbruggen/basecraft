@@ -973,7 +973,7 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
                 object_identity(path, OrdinaryKind::File)?,
                 Some((
                     basecraft_io::hash_file(path)?,
-                    crate::records::input_evidence::stamp(path)?,
+                    crate::records::run_inputs::stamp(path)?,
                 )),
             )
         } else {
@@ -1106,7 +1106,7 @@ impl RecoveryAttempt {
         &self,
         document: usize,
         token: &str,
-        known: crate::records::input_evidence::SavePolicy,
+        known: crate::records::run_inputs::SavePolicy,
         acknowledge_incomplete: bool,
     ) -> Result<crate::session::SaveDecision> {
         self.validate()?;
@@ -1156,7 +1156,7 @@ impl RecoveryAttempt {
         let finalizing = doc.written;
         let observed = if doc.written {
             let _evidence =
-                match crate::records::input_evidence::Mutation::begin_in(self.session.project()) {
+                match crate::records::run_inputs::Mutation::begin_in(self.session.project()) {
                     Ok(guard) => guard,
                     Err(error) => return Err(refuse(&mut self.session, error)),
                 };
@@ -1239,7 +1239,7 @@ impl RecoveryAttempt {
     fn publish_inner(&mut self) -> Result<RecoveryCompletion> {
         self.validate()?;
         let _target = crate::records::save_guard::lock(&self.destination)?;
-        let evidence = crate::records::input_evidence::Mutation::begin_in(self.session.project())?;
+        let evidence = crate::records::run_inputs::Mutation::begin_in(self.session.project())?;
         for doc in &self.documents {
             if !doc.written {
                 return Err(crate::error::invalid(

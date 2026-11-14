@@ -19,7 +19,7 @@ use std::sync::Mutex;
 use basecraft_platform::files::ObjectIdentity;
 use serde::Serialize;
 
-use crate::records::input_evidence::{EvidenceCheck, InspectionIssue, SavePolicy};
+use crate::records::run_inputs::{EvidenceCheck, InspectionIssue, SavePolicy};
 use crate::{Result, error::invalid};
 
 /// A fresh advisory check, or the fresh scope returned after refusing stale
@@ -150,7 +150,7 @@ impl SaveCheck {
                     completed: false,
                 });
             }
-            crate::records::input_evidence::resolve_group(&group.conflict, policy, &mut removed)?;
+            crate::records::run_inputs::resolve_group(&group.conflict, policy, &mut removed)?;
             if let Some(actions) = &mut actions
                 && let Some(action) = actions.last_mut()
             {
@@ -360,7 +360,7 @@ pub(crate) fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
 /// modified some backing ledgers before failure; it is never a rollback claim.
 #[derive(Clone, Debug, Serialize)]
 pub struct EvidenceAction {
-    pub conflict: crate::records::input_evidence::EvidenceConflict,
+    pub conflict: crate::records::run_inputs::EvidenceConflict,
     pub policy: SavePolicy,
     pub completed: bool,
 }

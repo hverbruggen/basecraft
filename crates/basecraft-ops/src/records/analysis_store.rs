@@ -15,7 +15,7 @@ use basecraft_protocol::records::{
 use crate::{
     Error, Result,
     error::{damaged, invalid, limit, unsupported},
-    records::input_evidence::{SubmittedInput, read_input, relative, write_input, write_json},
+    records::run_inputs::{SubmittedInput, read_input, relative, write_input, write_json},
 };
 
 #[derive(Clone, Debug)]
