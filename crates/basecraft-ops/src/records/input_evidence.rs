@@ -98,123 +98,114 @@ impl Mutation {
         anchor: &Path,
         source: &Path,
         hash: &str,
-        stamp: Option<&FileStamp>,
+        captured_stamp: Option<&FileStamp>,
         dependencies: &[PathBuf],
         origin: &str,
         project: Option<&crate::project::Project>,
     ) -> Result<ArtifactRun> {
-        reference_input_locked(anchor, source, hash, dependencies, origin, stamp, project)
-    }
-}
-
-pub(crate) fn reference_input_locked(
-    anchor: &Path,
-    source: &Path,
-    hash: &str,
-    dependencies: &[PathBuf],
-    origin: &str,
-    captured_stamp: Option<&FileStamp>,
-    project: Option<&crate::project::Project>,
-) -> Result<ArtifactRun> {
-    use basecraft_protocol::provenance::{
-        ArtifactRevision, Completeness, InputReference, Publication,
-    };
-    let run = crate::records::analysis_store::ArtifactRun::create(
-        project,
-        anchor,
-        &ulid::Ulid::generate().to_string(),
-    )?;
-    let source = source.canonicalize()?;
-    let reservation = lock_in(project)?;
-    reservation.source(&source)?;
-    if captured_stamp.map_or_else(
-        || {
-            basecraft_io::hash_file(&source)
-                .map(|actual| actual != hash)
-                .map_err(crate::Error::from)
-        },
-        |before| stamp(&source).map(|now| &now != before),
-    )? {
-        return Err(crate::Error::ChangedOnDisk { path: source });
-    }
-    let reference = InputReference {
-        path: crate::records::input_evidence::relative(run.directory(), &source)?,
-        stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
-        hash: hash.into(),
-        extra: BTreeMap::new(),
-    };
-    let mut input = crate::records::input_evidence::SubmittedInput {
-        schema_version: 1,
-        source: Some(reference.clone()),
-        submitted_hash: hash.into(),
-        submitted_size: reference.stamp.size,
-        transformation: "identity-v1".into(),
-        state: "referenced".into(),
-        analysis_run: None,
-        proposal_target: None,
-        upstream: Vec::new(),
-        origin_run: None,
-        extra: BTreeMap::new(),
-    };
-    // A referenced source inside the project keeps its history there.
-    let source_bundle = crate::records::provenance::bundle_for_result(&source, project);
-    let mut upstream = Vec::new();
-    for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
-        if let Some((record, hash)) = crate::records::provenance::latest(dependency)? {
-            upstream.push(basecraft_protocol::input_records::UpstreamLink {
-                bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?)
-                    .into(),
-                id: record.id,
-                hash,
-            });
+        use basecraft_protocol::provenance::{
+            ArtifactRevision, Completeness, InputReference, Publication,
+        };
+        let run = crate::records::analysis_store::ArtifactRun::create(
+            project,
+            anchor,
+            &ulid::Ulid::generate().to_string(),
+        )?;
+        let source = source.canonicalize()?;
+        let reservation = lock_in(project)?;
+        reservation.source(&source)?;
+        if captured_stamp.map_or_else(
+            || {
+                basecraft_io::hash_file(&source)
+                    .map(|actual| actual != hash)
+                    .map_err(crate::Error::from)
+            },
+            |before| stamp(&source).map(|now| &now != before),
+        )? {
+            return Err(crate::Error::ChangedOnDisk { path: source });
         }
-    }
-    if !upstream.is_empty() {
-        input.upstream = upstream;
-    }
-    crate::records::input_evidence::write_input(run.directory(), &input)?;
-    run.write_run(
-        basecraft_protocol::records::AnalysisRunStatus::Referenced,
-        anchor
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(str::to_owned),
-    )?;
-    crate::records::input_evidence::register(&run)?;
-    let publication = Publication {
-        schema_version: 1,
-        id: run.id().into(),
-        session: run.id().into(),
-        parents: vec![],
-        parent_hashes: BTreeMap::new(),
-        created: basecraft_platform::now_rfc3339(),
-        origin: origin.into(),
-        inputs: vec![ArtifactRevision {
-            id: format!("{}:source", run.id()),
-            logical_name: source
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
+        let reference = InputReference {
+            path: crate::records::input_evidence::relative(run.directory(), &source)?,
+            stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
             hash: hash.into(),
-            size: reference.stamp.size,
-            retained: None,
-            reference: Some(reference),
-        }],
-        outputs: vec![],
-        events: vec![],
-        effective_edits: vec![],
-        withdrawn: Vec::new(),
-        completeness: Completeness {
-            ancestry_known: false,
-            input_bytes_available: true,
-            execution_specification_available: false,
-            replay_verified: false,
-        },
-        report_template_version: 2,
-    };
-    crate::records::provenance::publish(run.directory(), &publication)?;
-    Ok(run)
+            extra: BTreeMap::new(),
+        };
+        let mut input = crate::records::input_evidence::SubmittedInput {
+            schema_version: 1,
+            source: Some(reference.clone()),
+            submitted_hash: hash.into(),
+            submitted_size: reference.stamp.size,
+            transformation: "identity-v1".into(),
+            state: "referenced".into(),
+            analysis_run: None,
+            proposal_target: None,
+            upstream: Vec::new(),
+            origin_run: None,
+            extra: BTreeMap::new(),
+        };
+        // A referenced source inside the project keeps its history there.
+        let source_bundle = crate::records::provenance::bundle_for_result(&source, project);
+        let mut upstream = Vec::new();
+        for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
+            if let Some((record, hash)) = crate::records::provenance::latest(dependency)? {
+                upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                    bundle: (crate::records::input_evidence::relative(
+                        run.directory(),
+                        dependency,
+                    )?)
+                    .into(),
+                    id: record.id,
+                    hash,
+                });
+            }
+        }
+        if !upstream.is_empty() {
+            input.upstream = upstream;
+        }
+        crate::records::input_evidence::write_input(run.directory(), &input)?;
+        run.write_run(
+            basecraft_protocol::records::AnalysisRunStatus::Referenced,
+            anchor
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_owned),
+        )?;
+        crate::records::input_evidence::register(&run)?;
+        let publication = Publication {
+            schema_version: 1,
+            id: run.id().into(),
+            session: run.id().into(),
+            parents: vec![],
+            parent_hashes: BTreeMap::new(),
+            created: basecraft_platform::now_rfc3339(),
+            origin: origin.into(),
+            inputs: vec![ArtifactRevision {
+                id: format!("{}:source", run.id()),
+                logical_name: source
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                hash: hash.into(),
+                size: reference.stamp.size,
+                retained: None,
+                reference: Some(reference),
+            }],
+            outputs: vec![],
+            events: vec![],
+            effective_edits: vec![],
+            withdrawn: Vec::new(),
+            completeness: Completeness {
+                ancestry_known: false,
+                input_bytes_available: true,
+                execution_specification_available: false,
+                replay_verified: false,
+            },
+            report_template_version: 2,
+        };
+        crate::records::provenance::publish(run.directory(), &publication)?;
+        Ok(run)
+    }
 }
 
 pub use basecraft_protocol::input_records::SubmittedInput;

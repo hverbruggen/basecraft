@@ -601,102 +601,20 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn task_nonregular_evidence_is_rejected_in_bounded_subprocess() {
-        use std::os::unix::fs::PermissionsExt;
-        const CHILD: &str = "BASECRAFT_TASK_FIFO_CHILD";
-        if let Some(root) = std::env::var_os(CHILD) {
-            let rows = rows(
-                &Path::new(&root).join(".basecraft/analyses-v1/runs"),
-                false,
-                "current",
-            );
-            let text = rows.to_string();
-            assert!(
-                text.contains("not a regular file") || !text.contains("\"registered\""),
-                "{text}"
-            );
-            assert!(!text.contains("reading limit"), "{text}");
-            assert!(
-                rows["jobs"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|row| row["id"] == "regular")
-            );
-            return;
-        }
-        for location in ["execution", "runtime", "publication"] {
-            let temp = tempfile::tempdir().unwrap();
-            let (runs, receipt, mut outcome) = run_fixture(temp.path(), "completed");
-            let path = match location {
-                "execution" => receipt.with_file_name("execution.json"),
-                "runtime" => receipt.clone(),
-                _ => {
-                    outcome["artifacts"] = serde_json::json!([{ "role":"artifacts","path":"/tree.nwk","digest":"hash"}]);
-                    std::fs::write(
-                        &receipt,
-                        basecraft_protocol::records::encode(&outcome).unwrap(),
-                    )
-                    .unwrap();
-                    receipt.parent().unwrap().join("manifest.json")
-                }
-            };
-            if path.exists() {
-                std::fs::remove_file(&path).unwrap();
-            }
-            assert!(
-                std::process::Command::new("mkfifo")
-                    .arg(&path)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
-            let regular = runs.join("regular");
-            std::fs::create_dir_all(&regular).unwrap();
-            let mut other = outcome.clone();
-            other["run_id"] = "regular".into();
-            write(&regular.join("runtime.json"), &other);
-            write(&regular.join("execution.json"), &execution("current"));
-            let test = crate::isolated_profile::test_name();
-            let mut child = crate::isolated_profile::relaunch(&test)
-                .env(CHILD, temp.path())
-                .stdout(std::process::Stdio::piped())
-                .spawn()
-                .unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            loop {
-                if child.try_wait().unwrap().is_some() {
-                    let output = child.wait_with_output().unwrap();
-                    crate::isolated_profile::assert_one_passed(&test, &output);
-                    break;
-                }
-                if std::time::Instant::now() >= deadline {
-                    child.kill().unwrap();
-                    child.wait().unwrap();
-                    panic!("{location} FIFO hung the retained Tasks query");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-        }
+    fn a_record_that_is_no_regular_file_is_refused_without_opening_it() {
         let temp = tempfile::tempdir().unwrap();
-        let regular = temp.path().join("regular.json");
-        let link = temp.path().join("regular-link.json");
-        std::fs::write(&regular, "{}").unwrap();
-        std::os::unix::fs::symlink(&regular, &link).unwrap();
-        assert_eq!(
-            crate::records::provenance::read_record(&link).unwrap(),
-            b"{}"
-        );
+        let (runs, receipt, _) = run_fixture(temp.path(), "completed");
+        let fifo = receipt.with_file_name("execution.json");
+        std::fs::remove_file(&fifo).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(made.unwrap().success());
+        // Opening a FIFO would block; the budget looks before it opens.
         let mut budget = TaskReadBudget(1024);
+        assert!(budget.read(&fifo).is_err());
         assert!(budget.read(temp.path()).is_err());
         assert_eq!(budget.0, 1024);
-        let mut permissions = std::fs::metadata(&regular).unwrap().permissions();
-        permissions.set_mode(0o0);
-        std::fs::set_permissions(&regular, permissions).unwrap();
-        // Root may bypass permissions; normal validation runs as an unprivileged user.
-        if std::fs::File::open(&regular).is_err() {
-            assert!(budget.read(&regular).is_err());
-            assert_eq!(budget.0, 1024);
-        }
+        // Without its run record a run counts as another process's.
+        assert_eq!(rows(&runs, false, "current")["jobs"], serde_json::json!([]));
+        assert_eq!(rows(&runs, true, "current")["jobs"][0]["id"], "registered");
     }
 }

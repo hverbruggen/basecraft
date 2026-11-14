@@ -55,9 +55,11 @@ fn instrument_rendering_and_submission_share_one_trace_capture() {
     capture.write(&frozen).unwrap();
     Mutation::begin()
         .unwrap()
-        .reference_captured(
+        .reference_input_with_dependencies(
             &root.join("analysis"),
-            &capture,
+            capture.path(),
+            capture.hash(),
+            Some(capture.stamp()),
             &[],
             "fixture caller",
             None,

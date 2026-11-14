@@ -525,7 +525,6 @@ impl PreparedOperation {
             &policy,
             &inputs,
             &mut frozen,
-            captured,
             project.as_ref(),
         )?;
         let run_id = run.id().to_owned();
@@ -815,7 +814,6 @@ fn allocate_run(
     policy: &SessionPolicy,
     inputs: &PreparationInputs,
     frozen: &mut FrozenInputs,
-    captured: &[basecraft_ops::sanger_review::CapturedInput],
     project: Option<&basecraft_ops::project::Project>,
 ) -> Result<AllocatedRun> {
     let sequence = &inputs.sequence;
@@ -860,7 +858,6 @@ fn allocate_run(
             &mutation,
             &anchor,
             &input,
-            captured,
             &format!("Input for {}", operation.id),
             project,
         )?;

@@ -99,9 +99,11 @@ fn source_capture(
     anchor: &Path,
     project: Option<&crate::project::Project>,
 ) -> crate::Result<Source> {
-    let ledger = inputs::Mutation::begin_in(project)?.reference_captured(
+    let ledger = inputs::Mutation::begin_in(project)?.reference_input_with_dependencies(
         anchor,
-        capture,
+        capture.path(),
+        capture.hash(),
+        Some(capture.stamp()),
         &[],
         "Explicit Sanger input reference",
         project,

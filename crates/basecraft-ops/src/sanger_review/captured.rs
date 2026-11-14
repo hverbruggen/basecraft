@@ -67,25 +67,3 @@ impl CapturedInput {
         Ok(())
     }
 }
-
-impl crate::records::input_evidence::Mutation {
-    pub fn reference_captured(
-        &self,
-        anchor: &Path,
-        capture: &CapturedInput,
-        dependencies: &[PathBuf],
-        origin: &str,
-        project: Option<&crate::project::Project>,
-    ) -> Result<crate::records::analysis_store::ArtifactRun> {
-        capture.check_current()?;
-        crate::records::input_evidence::reference_input_locked(
-            anchor,
-            capture.path(),
-            capture.hash(),
-            dependencies,
-            origin,
-            Some(capture.stamp()),
-            project,
-        )
-    }
-}
