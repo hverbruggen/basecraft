@@ -373,6 +373,8 @@ impl qobject::DocumentOpens {
             }
         }
         if !worker {
+            // These open in the window at once: no earlier open keeps its claim on focus.
+            self.as_mut().revoke_focus();
             return match decision {
                 Open::Project => json(&serde_json::json!({"project": kind})),
                 Open::Switch(index) => json(&serde_json::json!({"switch": index, "view": true})),

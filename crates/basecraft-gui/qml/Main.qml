@@ -318,7 +318,6 @@ ApplicationWindow {
         if (step.error) { provenance.notification(path, step.error, "fail"); return }
         if (step.project) {
             // Project documents are edited on the Export tab.
-            documentOpens.revoke_focus()
             ribbonTabName = "Export"
             if (step.project === "metadata") specimenTable.dialog().open()
             else submissions.open(path)
@@ -334,7 +333,6 @@ ApplicationWindow {
             if (step.activate) documentOpens.activate(step.token)
             return
         }
-        documentOpens.revoke_focus()
         focusOpenedDocument = true
         tabs.currentIndex = index
         if (step.switch !== undefined) Qt.callLater(refreshCurrent)
