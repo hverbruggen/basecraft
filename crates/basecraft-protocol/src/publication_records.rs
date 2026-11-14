@@ -16,12 +16,18 @@ pub struct CollectionIntent {
     pub members: BTreeMap<PathBuf, String>,
 }
 
-/// Visible collection destination and members, recorded before copying.
+/// A collection's project destination and members, recorded before the
+/// collection's folder moves there (D26).
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CollectionExportIntent {
     pub schema: u32,
     pub destination: PathBuf,
     pub members: BTreeMap<PathBuf, String>,
+    /// The identity of the folder that becomes `destination`, as the
+    /// operating system reports it (`platform` plus its fields), so a repair
+    /// adopts only the folder this run moved.
+    #[schemars(with = "serde_json::Value")]
+    pub identity: serde_json::Value,
 }
 
 /// Identity of the synced pending file, recorded before no-replace promotion.

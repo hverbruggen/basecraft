@@ -276,6 +276,13 @@ impl Lines {
                 basecraft_protocol::records::writing_version().into(),
             );
             let mut line = serde_json::to_vec(&value)?;
+            // The offset holds only while keys sort and `_checksum` is first.
+            if !line.starts_with(br#"{"_checksum":""#) || line.get(at - 1) != Some(&b',') {
+                return Err(crate::Error::Damaged {
+                    path: "journal".into(),
+                    detail: "journal line does not start with its checksum".into(),
+                });
+            }
             line.push(b'\n');
             lines.lines.push((line, at));
         }

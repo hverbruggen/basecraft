@@ -388,3 +388,22 @@ fn a_save_keeps_the_journal_of_the_same_file_open_twice() {
     let journal = basecraft_ops::log::read_all(session.recovery_root()).unwrap();
     assert!(journal.iter().any(|entry| entry.id == kept));
 }
+
+/// D26 across file systems (on the build server the target folder is on
+/// disk and /tmp in memory): the file is copied, checked, receipted and
+/// renamed into place, and the run's file goes, so one copy remains.
+#[test]
+fn a_move_across_file_systems_leaves_one_copy() {
+    let run = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let source = run.path().join("tree.nwk");
+    std::fs::write(&source, b"(a,b);\n").unwrap();
+    let hash = basecraft_io::hash_file(&source).unwrap();
+    let destination = project.path().join("tree.nwk");
+    let receipt = run.path().join("receipt.json");
+    basecraft_ops::records::move_file(&source, &destination, &hash, &receipt).unwrap();
+    assert!(!source.exists());
+    assert_eq!(std::fs::read(&destination).unwrap(), b"(a,b);\n");
+    basecraft_ops::records::verify_export(&destination, &hash, &receipt).unwrap();
+    assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 1);
+}

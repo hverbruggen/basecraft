@@ -30,8 +30,8 @@ pub use links::{
 };
 pub use provenance::{
     HistoryGap, SavedHistory, bundle_for_result, companion, file_run_entry, inspect, latest,
-    latest_record, move_file, package, publish, publish_run, read_record, retained_file,
-    saved_history, verify, verify_export, write_reports,
+    latest_record, move_file, move_into_project, package, publish, publish_run, read_record,
+    retained_file, saved_history, verify, verify_export, write_reports,
 };
 pub use replay::{
     PublishedWithFailure, RecoveryCompletion, RecoveryMode, RecoveryPhase, ReplayReport,

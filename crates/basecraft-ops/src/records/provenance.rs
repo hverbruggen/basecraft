@@ -113,25 +113,80 @@ pub fn retained_file(
 /// (D26). The receipt names the file's inode before the move, so a later
 /// repair adopts only the file this run moved.
 pub fn move_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
+    let check = |file: &Path| {
+        if basecraft_io::hash_file(file)? == hash {
+            Ok(())
+        } else {
+            Err(invalid("member changed before export"))
+        }
+    };
+    check(source)?;
+    move_into_project(
+        source,
+        destination,
+        |file| write_receipt(receipt, destination, hash, file),
+        check,
+    )
+}
+
+/// Move a run's file or folder to `destination`, which must not exist (D26).
+/// `mark` records what is about to become `destination` (a receipt or an
+/// intent) before it appears there. Across file systems the source is
+/// copied to a temporary in the destination's folder, synced, checked with
+/// `check`, marked and renamed into place, and only then removed, so one
+/// copy remains.
+pub fn move_into_project(
+    source: &Path,
+    destination: &Path,
+    mark: impl Fn(&Path) -> Result<()>,
+    check: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
     let parent = destination
         .parent()
         .ok_or_else(|| invalid("missing destination parent"))?;
-    if basecraft_io::hash_file(source)? != hash {
-        return Err(invalid("member changed before export"));
-    }
-    write_receipt(receipt, destination, hash, source)?;
-    basecraft_platform::atomic::rename_noreplace(source, destination).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            crate::access::AccessError::DestinationExists.into()
-        } else {
-            crate::Error::from(error)
+    mark(source)?;
+    match basecraft_platform::atomic::rename_noreplace(source, destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            let folder = source.is_dir();
+            let pending = tempfile::Builder::new()
+                .prefix(".basecraft-export-")
+                .tempdir_in(parent)?;
+            let copy = pending.path().join("moving");
+            if folder {
+                copy_tree(source, &copy)?;
+            } else {
+                copy_atomic(source, &copy)?;
+            }
+            basecraft_platform::files::sync_directory(pending.path())?;
+            check(&copy)?;
+            mark(&copy)?;
+            no_replace(basecraft_platform::atomic::rename_noreplace(
+                &copy,
+                destination,
+            ))?;
+            if folder {
+                std::fs::remove_dir_all(source)?;
+            } else {
+                std::fs::remove_file(source)?;
+            }
         }
-    })?;
+        moved => no_replace(moved)?,
+    }
     basecraft_platform::files::sync_directory(parent)?;
     if let Some(folder) = source.parent() {
         basecraft_platform::files::sync_directory(folder)?;
     }
     Ok(())
+}
+
+fn no_replace(renamed: std::io::Result<()>) -> Result<()> {
+    renamed.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            crate::access::AccessError::DestinationExists.into()
+        } else {
+            crate::Error::from(error)
+        }
+    })
 }
 
 /// The receipt of a move: `file` is the file that becomes `destination`.
@@ -810,23 +865,30 @@ pub fn publish_run(
     inputs: Vec<ArtifactRevision>,
     outputs: Vec<ArtifactRevision>,
 ) -> Result<Publication> {
-    let (events, effective_edits, withdrawn) = latest(bundle)
-        .ok()
-        .flatten()
-        .map(|(previous, _)| {
-            (
+    // An earlier record of another id is a parent (D24); the run's own
+    // record published again, on a repair, keeps what it holds.
+    let (mut events, mut effective_edits, mut withdrawn) = Default::default();
+    let (mut parents, mut parent_hashes) = (Vec::new(), BTreeMap::new());
+    match latest(bundle)? {
+        Some((previous, _)) if previous.id == id => {
+            (events, effective_edits, withdrawn) = (
                 previous.events,
                 previous.effective_edits,
                 previous.withdrawn,
-            )
-        })
-        .unwrap_or_default();
+            );
+        }
+        Some((previous, hash)) => {
+            parent_hashes.insert(previous.id.clone(), hash);
+            parents.push(previous.id);
+        }
+        None => {}
+    }
     let publication = Publication {
         schema_version: 1,
         id: id.into(),
         session: basecraft_platform::process_instance().into(),
-        parents: vec![],
-        parent_hashes: BTreeMap::new(),
+        parents,
+        parent_hashes,
         created: basecraft_platform::now_rfc3339(),
         origin,
         inputs,

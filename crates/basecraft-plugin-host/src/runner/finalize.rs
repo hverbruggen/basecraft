@@ -77,29 +77,63 @@ impl PreparedOperation {
                 let intent = self
                     .run
                     .artifact(&format!("collection-{role}-export.json"))?;
-                if path.exists() {
-                    if !repair || !intent.is_file() {
+                let folder = |path: &Path| -> basecraft_ops::Result<serde_json::Value> {
+                    let kind = basecraft_platform::files::OrdinaryKind::Directory;
+                    let found = basecraft_platform::files::object_identity(path, kind)?;
+                    Ok(serde_json::to_value(found)?)
+                };
+                let published = expected.keys().all(|member| {
+                    let member = path.join(member).display().to_string();
+                    outcome
+                        .artifacts
+                        .iter()
+                        .any(|artifact| artifact.path == member)
+                });
+                if path.exists() && !(repair && published && intent.is_file()) {
+                    // Not yet in the outcome: adopt only the folder this run
+                    // moved, by the identity its intent recorded.
+                    let recorded = intent
+                        .is_file()
+                        .then(|| records::read_record(&intent))
+                        .transpose()?
+                        .map(|bytes| {
+                            basecraft_protocol::records::decode::<CollectionExportIntent>(&bytes)
+                        })
+                        .transpose()?;
+                    let current = folder(&path)?;
+                    if !repair || recorded.is_none_or(|known| known.identity != current) {
                         return Err(Error::Protocol(
                             "output_conflict: collection destination exists".into(),
                         ));
                     }
-                } else {
+                } else if !path.exists() {
                     verify_collection(&staging, &expected)?;
-                    let destination = self.policy.path(destination, true)?;
-                    records::write_json(
-                        &intent,
-                        &serde_json::to_value(CollectionExportIntent {
-                            schema: 1,
-                            destination: destination.clone(),
-                            members: expected.clone(),
-                        })?,
-                    )?;
                     for member in expected.keys() {
                         basecraft_platform::files::sync_file(&staging.join(member))?;
                     }
-                    basecraft_platform::atomic::rename_noreplace(&staging, &destination)?;
-                    basecraft_platform::files::sync_directory(
-                        destination.parent().unwrap_or(Path::new(".")),
+                    let destination = self.policy.path(destination, true)?;
+                    let record = serde_json::to_value(CollectionExportIntent {
+                        schema: 1,
+                        destination: destination.clone(),
+                        members: expected.clone(),
+                        identity: serde_json::Value::Null,
+                    })?;
+                    records::move_into_project(
+                        &staging,
+                        &destination,
+                        |moving| {
+                            let mut record = record.clone();
+                            record["identity"] = folder(moving)?;
+                            records::write_json(&intent, &record)
+                        },
+                        |copy| {
+                            verify_collection(copy, &expected).map_err(|error| {
+                                basecraft_ops::Error::Damaged {
+                                    path: copy.to_path_buf(),
+                                    detail: error.to_string(),
+                                }
+                            })
+                        },
                     )?;
                 }
                 verify_collection(&path, &expected)?;
@@ -331,12 +365,24 @@ impl PreparedOperation {
                     ));
                 }
             } else {
-                let (published, roster) = self.publish_workspace(destination)?;
-                outcome.warnings.extend(roster);
+                // A repair after the move adopts the file only by its receipt.
+                let receipt = self
+                    .run
+                    .artifact(basecraft_ops::delimitation::WORKSPACE_RECEIPT)?;
+                let digest = if path.exists() && receipt.is_file() {
+                    let moved: basecraft_protocol::publication_records::MemberExportReceipt =
+                        basecraft_protocol::records::decode(&records::read_record(&receipt)?)?;
+                    records::verify_export(&path, &moved.hash, &receipt)?;
+                    moved.hash
+                } else {
+                    let (published, roster) = self.publish_workspace(destination)?;
+                    outcome.warnings.extend(roster);
+                    basecraft_io::hash_file(&published)?
+                };
                 outcome.artifacts.push(PublishedArtifact {
                     role: crate::policy::WORKSPACE_DESTINATION.into(),
-                    path: published.display().to_string(),
-                    digest: basecraft_io::hash_file(&published)?,
+                    path: path.display().to_string(),
+                    digest,
                 });
                 self.persist(outcome)?;
             }

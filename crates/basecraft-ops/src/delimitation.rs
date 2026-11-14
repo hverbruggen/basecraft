@@ -140,19 +140,20 @@ pub fn link_roster(
     })
 }
 
+/// The run's receipt for the workspace it moved into the project.
+pub const WORKSPACE_RECEIPT: &str = "workspace-export.json";
+
 /// Publish a run's species workspace as a new SPART file at `target`, which
 /// may lie anywhere in the project; never replaces an existing file. The
-/// staged file moves there; the run keeps no copy (D26).
+/// staged file moves there with a receipt; the run keeps no copy (D26).
 pub fn publish_workspace_to(
     target: &std::path::Path,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
     run: &crate::records::analysis_store::ArtifactRun,
 ) -> Result<()> {
-    let name = stage_workspace(target, work, run)?;
-    basecraft_platform::atomic::rename_noreplace(&run.staging(&name)?, target)?;
-    basecraft_platform::files::sync_directory(
-        target.parent().unwrap_or(std::path::Path::new(".")),
-    )?;
+    let staged = run.staging(&stage_workspace(target, work, run)?)?;
+    let hash = basecraft_io::hash_file(&staged)?;
+    crate::records::move_file(&staged, target, &hash, &run.artifact(WORKSPACE_RECEIPT)?)?;
     run.bind(target)
 }
 
