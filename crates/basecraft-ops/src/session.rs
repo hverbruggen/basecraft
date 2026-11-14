@@ -349,11 +349,6 @@ impl Session {
         self.actor = actor;
     }
 
-    /// Who this session's edits and runs are recorded as.
-    pub fn actor(&self) -> &Actor {
-        &self.actor
-    }
-
     /// The Sanger review payload for a checked handle.
     pub fn sanger_review(&self, id: DocId) -> Result<&crate::sanger_review::SangerReview> {
         self.content(id)?.sanger_review().ok_or(Error::WrongKind {
@@ -365,12 +360,6 @@ impl Session {
     /// A sequence document. Returns an error for a missing ID or a different document kind.
     pub fn doc(&self, id: DocId) -> Result<&SequenceDoc> {
         Ok(&self.sequence_of(id)?.doc)
-    }
-
-    /// The record names more than one record in a sequence document's file
-    /// uses, found once when the file opened.
-    pub fn repeated_record_names(&self, id: DocId) -> Result<&[String]> {
-        Ok(&self.sequence_of(id)?.others.repeated_names)
     }
 
     /// An alignment document. Returns an error for a missing ID or a different document kind.
