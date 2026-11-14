@@ -42,7 +42,7 @@ fn a_fit_passes_only_declared_settings_and_writes_beside_the_workspace() {
     assert_eq!(ptp.operation, "basecraft.delimitation/ptp@1");
     assert_eq!(ptp.input, tree);
     // An empty setting and undeclared ones are left out; a request's seed wins.
-    assert_eq!(ptp.parameters, serde_json::json!({"rooted": true, "seed": 7}));
+    assert_eq!(ptp.parameters.to_string(), r#"{"rooted":true,"seed":7}"#);
     assert_eq!(ptp.output.parent(), Some(dir.path()));
     assert_eq!(ptp.output.extension().unwrap(), "json");
 
@@ -76,5 +76,5 @@ fn refused_requests_say_what_is_missing() {
     ));
     let alignment = request(Method::Asap, &tree, r#"{"deduplicate": true}"#);
     let asap = run(&session, doc, &alignment, &declared(&["unique_haplotypes"])).unwrap();
-    assert_eq!(asap.parameters, serde_json::json!({"unique_haplotypes": true}));
+    assert_eq!(asap.parameters.to_string(), r#"{"unique_haplotypes":true}"#);
 }

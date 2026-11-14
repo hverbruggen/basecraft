@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::{DocId, Error, Result, Session};
 
@@ -162,9 +162,9 @@ pub fn run(
     };
 
     let mut params = Map::new();
-    params.insert("rooted".into(), json!(request.rooted));
-    params.insert("workers".into(), json!(1));
-    params.insert("seed".into(), json!(1));
+    params.insert("rooted".into(), request.rooted.into());
+    params.insert("workers".into(), 1.into());
+    params.insert("seed".into(), 1.into());
     for (key, value) in &request.settings {
         if SETTINGS.contains(&key.as_str()) && !value.as_str().is_some_and(str::is_empty) {
             params.insert(key.clone(), value.clone());
@@ -182,24 +182,24 @@ pub fn run(
             .or_else(|| params.get("unique_haplotypes"))
             .and_then(Value::as_bool)
             .unwrap_or(method != Method::Asap);
-        params.insert("unique_haplotypes".into(), json!(unique));
+        params.insert("unique_haplotypes".into(), unique.into());
     }
     if method.is_display() {
         params.insert(
             "tree_role".into(),
-            json!("display only; does not change species assignments"),
+            "display only; does not change species assignments".into(),
         );
         let tree_method = if method == Method::DisplayUpgma {
             "upgma"
         } else {
             "njstar"
         };
-        params.insert("method".into(), json!(tree_method));
+        params.insert("method".into(), tree_method.into());
     }
     if method == Method::DisplayIqtree {
-        let model = params.remove("iqtree_model").unwrap_or(json!("MFP"));
+        let model = params.remove("iqtree_model").unwrap_or_else(|| "MFP".into());
         params.insert("model".into(), model);
-        params.insert("keep_identical".into(), json!(true));
+        params.insert("keep_identical".into(), true.into());
     }
     if method == Method::GroupStatistics {
         let hypothesis = workspace
@@ -212,7 +212,7 @@ pub fn run(
             .iter()
             .flat_map(|g| g.members.iter().map(move |id| (id.clone(), g.id.clone())))
             .collect();
-        params.insert("groups_data".into(), json!(groups));
+        params.insert("groups_data".into(), serde_json::to_value(groups)?);
     }
     params.retain(|key, _| declared.contains(key));
 
