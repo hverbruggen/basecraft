@@ -85,3 +85,220 @@ macro_rules! editor_state {
     };
 }
 pub(crate) use editor_state;
+
+/// The methods every document editor (sequence, alignment, tree, species
+/// workspace) has in the same form. `$getter` is the `Session` method that
+/// returns the editor's document. Flags: `fresh` adds `install_fresh` for
+/// editors the application opens into new tabs; `fail` adds the plain error
+/// message (the species editor writes its own).
+///
+/// The bridge supplies `install_opened`, `refresh`, and two undo steps:
+/// `before_history`, which may refuse undo and redo, and `after_history`,
+/// which brings the view up to date with the document.
+macro_rules! document_editor {
+    ($controller:ty, $getter:ident [fresh $($flag:ident)*]) => {
+        impl $controller {
+            pub(crate) fn install_fresh(
+                self: std::pin::Pin<&mut Self>,
+                candidate: crate::document_open::Candidate,
+            ) -> Result<(), crate::document_open::OpenError> {
+                if self.rust().session.is_some() || self.rust().doc.is_some() || self.rust().busy {
+                    return Err(crate::document_open::OpenError::StaleIdentity);
+                }
+                self.install_opened(candidate)
+            }
+        }
+        crate::editor::document_editor!($controller, $getter [$($flag)*]);
+    };
+    ($controller:ty, $getter:ident [fail $($flag:ident)*]) => {
+        impl $controller {
+            /// Something failed.
+            fn fail(mut self: std::pin::Pin<&mut Self>, msg: &str) {
+                self.as_mut().set_message_kind(cxx_qt_lib::QString::from("error"));
+                self.as_mut().set_message(cxx_qt_lib::QString::from(msg));
+            }
+        }
+        crate::editor::document_editor!($controller, $getter [$($flag)*]);
+    };
+    ($controller:ty, $getter:ident []) => {
+        impl $controller {
+            /// End the closed tab's session now (Main.qml `removeDocument`).
+            pub fn close_session(mut self: std::pin::Pin<&mut Self>) {
+                self.as_mut().rust_mut().session = None;
+            }
+            pub fn document_record(&self) -> cxx_qt_lib::QString {
+                crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
+            }
+            pub fn record_revision(&self) -> cxx_qt_lib::QString {
+                crate::provenance_bridge::session_revision(self.rust().session.as_ref(), self.rust().doc)
+            }
+            pub fn memory_report(&self) -> cxx_qt_lib::QString {
+                cxx_qt_lib::QString::from(&crate::bridge::memory_text())
+            }
+            /// A neutral hint. Messages stay brief: say what happened.
+            fn notify(mut self: std::pin::Pin<&mut Self>, msg: &str) {
+                self.as_mut().set_message_kind(cxx_qt_lib::QString::default());
+                self.as_mut().set_message(cxx_qt_lib::QString::from(msg));
+            }
+            /// Something completed.
+            fn done(mut self: std::pin::Pin<&mut Self>, msg: &str) {
+                self.as_mut().set_message_kind(cxx_qt_lib::QString::from("ok"));
+                self.as_mut().set_message(cxx_qt_lib::QString::from(msg));
+            }
+            fn find_y(&self) -> f32 {
+                0.0
+            }
+
+            /// The start of every refresh: find, history and recovery state.
+            /// False when the document can no longer be read; the message
+            /// then says why.
+            fn refresh_start(mut self: std::pin::Pin<&mut Self>) -> bool {
+                self.as_mut().find_update(false);
+                let history = self.record_revision();
+                self.as_mut().set_history_revision(history);
+                if let Some(warning) =
+                    crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
+                {
+                    self.as_mut().set_message_kind(cxx_qt_lib::QString::from("error"));
+                    self.as_mut().set_message(warning);
+                }
+                if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+                    crate::bridge::checked_document!(sync self, session.$getter(doc));
+                }
+                true
+            }
+
+            pub fn open_file(mut self: std::pin::Pin<&mut Self>, path: &cxx_qt_lib::QString) -> bool {
+                if self.rust().busy {
+                    self.fail("Wait for the running operation before replacing this document");
+                    return false;
+                }
+                self.as_mut().set_busy(true);
+                crate::document_open::open_file(self, path, |mut this, result| {
+                    let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
+                    this.as_mut().set_busy(false);
+                    let ok = result.is_ok();
+                    if let Err(error) = result {
+                        this.as_mut().fail(&error.to_string());
+                    }
+                    this.opened(ok);
+                })
+            }
+
+            pub fn undo(self: std::pin::Pin<&mut Self>) {
+                self.history(false);
+            }
+            pub fn redo(self: std::pin::Pin<&mut Self>) {
+                self.history(true);
+            }
+            /// Undo or redo one step. The document is unsaved exactly when
+            /// the session says so: undoing back to the saved state leaves
+            /// it clean.
+            fn history(mut self: std::pin::Pin<&mut Self>, redo: bool) {
+                if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+                    crate::bridge::checked_document!(sync self, session.$getter(doc));
+                }
+                if !self.as_mut().before_history() {
+                    return;
+                }
+                let result = {
+                    let mut r = self.as_mut().rust_mut();
+                    let r = &mut *r;
+                    let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                        return;
+                    };
+                    if redo { session.redo(doc) } else { session.undo(doc) }
+                };
+                match result {
+                    Ok(_) => {
+                        let dirty =
+                            crate::document_open::unsaved(self.rust().session.as_ref(), self.rust().doc);
+                        self.as_mut().set_dirty(dirty);
+                        // Undoing or redoing makes the last message stale.
+                        self.as_mut().notify("");
+                    }
+                    Err(e) => self.as_mut().fail(&e.to_string()),
+                }
+                self.as_mut().after_history();
+                self.refresh();
+            }
+        }
+    };
+}
+pub(crate) use document_editor;
+
+/// Figure export for an editor that draws its document. The bridge module
+/// supplies `figure_svg(view, document, scope, theme, font, include_selection)`
+/// and `has_figure_selection(view)`. Scope 0 is the visible view, 1 the selection,
+/// 2 the whole document.
+macro_rules! figure_export {
+    ($controller:ty, $getter:ident) => {
+        impl $controller {
+            pub fn export_figure(
+                self: std::pin::Pin<&mut Self>,
+                path: &cxx_qt_lib::QString,
+                scope: i32,
+                publication: bool,
+            ) {
+                self.export_figure_with(path, scope, publication, None, false);
+            }
+            pub fn export_figure_png(
+                self: std::pin::Pin<&mut Self>,
+                path: &cxx_qt_lib::QString,
+                scope: i32,
+                publication: bool,
+                width: f64,
+            ) {
+                self.export_figure_with(path, scope, publication, Some(width), false);
+            }
+            fn export_figure_with(
+                mut self: std::pin::Pin<&mut Self>,
+                path: &cxx_qt_lib::QString,
+                scope: i32,
+                publication: bool,
+                png_width: Option<f64>,
+                include_selection: bool,
+            ) {
+                if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+                    crate::bridge::checked_document!(sync self, session.$getter(doc));
+                }
+                if !(0..=2).contains(&scope) {
+                    self.fail("Unknown figure scope");
+                    return;
+                }
+                if scope == 1 && !has_figure_selection(&self.rust().view) {
+                    self.fail("Select a region or clade first");
+                    return;
+                }
+                let target = std::path::PathBuf::from(path.to_string());
+                let result = (|| -> basecraft_ops::Result<()> {
+                    let mut r = self.as_mut().rust_mut();
+                    let r = &mut *r;
+                    let Some(doc) = r.doc else { return Ok(()) };
+                    let Some(session) = &r.session else { return Ok(()) };
+                    let theme = if publication {
+                        crate::appearance::publication_theme()
+                    } else {
+                        r.theme.clone()
+                    };
+                    let font = r.mono_font.to_string();
+                    let document = session.$getter(doc)?;
+                    let svg = figure_svg(&mut r.view, document, scope, &theme, &font, include_selection)?;
+                    let Some(session) = r.session.as_mut() else { return Ok(()) };
+                    if let Some(width) = png_width {
+                        let bytes = crate::figure_png::render(&svg, width)
+                            .map_err(basecraft_ops::Error::Invalid)?;
+                        session.export(doc, &target, "png", |w| std::io::Write::write_all(w, &bytes))
+                    } else {
+                        session.export(doc, &target, "svg", |w| std::io::Write::write_all(w, svg.as_bytes()))
+                    }
+                })();
+                match result {
+                    Ok(()) => self.done(&format!("Exported {}", crate::bridge::file_name(&target))),
+                    Err(e) => self.fail(&format!("Export failed: {e}")),
+                }
+            }
+        }
+    };
+}
+pub(crate) use figure_export;

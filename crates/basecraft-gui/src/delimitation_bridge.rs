@@ -296,6 +296,19 @@ fn group(members: BTreeSet<String>, label: String) -> Group {
         attributes: BTreeMap::new(),
     }
 }
+crate::editor::document_editor!(qobject::DelimitationController, delimitation []);
+
+impl qobject::DelimitationController {
+    fn before_history(self: Pin<&mut Self>) -> bool {
+        self.workspace_available()
+    }
+
+    fn after_history(mut self: Pin<&mut Self>) {
+        self.as_mut().set_statistics_json(QString::from("{}"));
+        self.cancel_cut();
+    }
+}
+
 impl crate::document_open::DocumentEditor for qobject::DelimitationController {
     fn apply_edit(self: Pin<&mut Self>, op: Op) -> bool {
         match op {
@@ -309,9 +322,6 @@ impl crate::document_open::DocumentEditor for qobject::DelimitationController {
 }
 
 impl qobject::DelimitationController {
-    pub fn close_session(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().session = None;
-    }
 
     pub fn accessible_page(&self, page: i32) -> QString {
         let access_thread = self.qt_thread();
@@ -335,13 +345,6 @@ impl qobject::DelimitationController {
         )
     }
 
-    pub fn document_record(&self) -> QString {
-        crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
-    }
-    pub fn record_revision(&self) -> QString {
-        crate::provenance_bridge::session_revision(self.rust().session.as_ref(), self.rust().doc)
-    }
-
     fn fail(mut self: Pin<&mut Self>, text: &str) {
         // A tree that is not ultrametric: offer to smooth it (D17).
         let tree = &self.rust().analysis_tree;
@@ -358,19 +361,10 @@ impl qobject::DelimitationController {
         self.set_message(QString::from(&summary));
     }
     fn refresh(mut self: Pin<&mut Self>) {
-        self.as_mut().find_update(false);
-        let history = self.record_revision();
-        self.as_mut().set_history_revision(history);
-        if let Some(warning) =
-            crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
-        {
-            self.as_mut().set_message_kind(QString::from("error"));
-            self.as_mut().set_message(warning);
+        if !self.as_mut().refresh_start() {
+            return;
         }
         let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.delimitation(doc));
-        }
         let Some((data, status)) = ({
             let r = self.rust();
             r.session.as_ref().zip(r.doc).map(|(s, d)| {
@@ -452,22 +446,6 @@ impl qobject::DelimitationController {
             Err(e) => self.fail(e),
         }
         result
-    }
-    pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        if self.rust().busy {
-            self.fail("Wait for the running operation before replacing this document");
-            return false;
-        }
-        self.as_mut().set_busy(true);
-        crate::document_open::open_file(self, path, |mut this, result| {
-            let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
-            this.as_mut().set_busy(false);
-            let ok = result.is_ok();
-            if let Err(error) = result {
-                this.as_mut().fail(&error.to_string());
-            }
-            this.opened(ok);
-        })
     }
 
     fn install_opened(
@@ -1394,34 +1372,6 @@ impl qobject::DelimitationController {
             }
         }
     }
-    fn history(mut self: Pin<&mut Self>, redo: bool) {
-        if !self.as_mut().workspace_available() {
-            return;
-        }
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            r.session
-                .as_mut()
-                .zip(r.doc)
-                .map(|(s, d)| if redo { s.redo(d) } else { s.undo(d) })
-        };
-        if let Some(Err(e)) = result {
-            self.fail(&e.to_string());
-        } else {
-            self.as_mut().set_statistics_json(QString::from("{}"));
-            self.as_mut().set_message(QString::default());
-            self.as_mut().set_dirty(true);
-            self.as_mut().cancel_cut();
-            self.refresh();
-        }
-    }
-    pub fn undo(self: Pin<&mut Self>) {
-        self.history(false);
-    }
-    pub fn redo(self: Pin<&mut Self>) {
-        self.history(true);
-    }
     pub fn save(mut self: Pin<&mut Self>) {
         let path = self.rust().file_path.clone();
         self.as_mut().save_as(&path);
@@ -1467,8 +1417,7 @@ impl qobject::DelimitationController {
                 }
                 self.as_mut().set_file_path(path.clone());
                 self.as_mut().set_dirty(false);
-                self.as_mut().set_message_kind(QString::from("ok"));
-                self.set_message(QString::from("Saved"));
+                self.as_mut().done("Saved");
                 true
             }
             Some(Err(e)) => {
@@ -1518,8 +1467,7 @@ impl qobject::DelimitationController {
         })();
         match result {
             Ok(()) => {
-                self.as_mut().set_message_kind(QString::from("ok"));
-                self.set_message(QString::from("Exported comparison"));
+                self.as_mut().done("Exported comparison");
             }
             Err(e) => self.fail(&e.to_string()),
         }
@@ -1606,8 +1554,7 @@ impl qobject::DelimitationController {
         })();
         match result {
             Ok(()) => {
-                self.as_mut().set_message_kind(QString::from("ok"));
-                self.set_message(QString::from("Exported distance summaries"));
+                self.as_mut().done("Exported distance summaries");
             }
             Err(error) => self.fail(&error.to_string()),
         }
@@ -2025,9 +1972,7 @@ impl qobject::DelimitationController {
                         )));
                     }
                 }
-                self.as_mut().set_message_kind(QString::from("ok"));
-                self.as_mut()
-                    .set_message(QString::from("Analysis completed"));
+                self.as_mut().done("Analysis completed");
                 self.as_mut().refresh();
                 self.analysis_done(true);
             }
@@ -2193,9 +2138,6 @@ impl qobject::DelimitationController {
             progress["completed"],
             progress["total"]
         )));
-    }
-    pub fn memory_report(&self) -> QString {
-        QString::from(&crate::bridge::memory_text())
     }
 }
 
@@ -2379,9 +2321,6 @@ impl qobject::DelimitationController {
         };
         let d = crate::bridge::checked_document!(access_thread, session.delimitation(doc));
         let _ = (d, hit);
-    }
-    fn find_y(&self) -> f32 {
-        0.0
     }
 }
 

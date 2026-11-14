@@ -516,6 +516,52 @@ pub(crate) fn file_folder(file: &Path) -> PathBuf {
     file.parent().map_or_else(PathBuf::new, Path::to_path_buf)
 }
 
+crate::editor::document_editor!(qobject::GenomeController, doc [fresh fail]);
+crate::editor::figure_export!(qobject::GenomeController, doc);
+
+fn has_figure_selection(view: &GenomeView) -> bool {
+    view.selection.is_some()
+}
+
+fn figure_svg(
+    view: &mut GenomeView,
+    sequence: &basecraft_docs::SequenceDoc,
+    scope: i32,
+    theme: &basecraft_viewmodel::Theme,
+    font: &str,
+    _include_selection: bool,
+) -> basecraft_ops::Result<String> {
+    let mut view = view.clone();
+    if scope == 2 {
+        view.fit_doc(sequence);
+    }
+    if scope == 1 {
+        let (start, end) = view.selection.unwrap_or((0, sequence.len()));
+        view.mode = basecraft_viewmodel::genome::Mode::Linear;
+        #[allow(clippy::cast_precision_loss)]
+        {
+            view.start = start as f64;
+            view.bp_per_px = (end - start).max(1) as f64 / f64::from(view.width);
+        }
+        view.auto_fit = false;
+    }
+    if scope != 0 {
+        view.selection = None;
+        view.selection_parts = None;
+        view.selected = None;
+        view.cursor = None;
+    }
+    let mut frame = Frame::new();
+    view.build(sequence, theme, &mut frame);
+    Ok(basecraft_viewmodel::svg::frame_svg(
+        &frame,
+        view.width,
+        view.height,
+        font,
+        theme.background,
+    ))
+}
+
 impl crate::document_open::DocumentEditor for qobject::GenomeController {
     fn apply_edit(mut self: Pin<&mut Self>, op: Op) -> bool {
         let a = self.as_mut().edit(op).is_some();
@@ -537,17 +583,6 @@ impl crate::document_open::DocumentEditor for qobject::GenomeController {
 impl qobject::GenomeController {
     pub fn record_folder(&self) -> QString {
         crate::document_open::record_folder(self.rust().session.as_ref())
-    }
-
-    pub fn close_session(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().session = None;
-    }
-
-    pub fn document_record(&self) -> QString {
-        crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
-    }
-    pub fn record_revision(&self) -> QString {
-        crate::provenance_bridge::session_revision(self.rust().session.as_ref(), self.rust().doc)
     }
 
     pub fn accessible_page(&self, page: i32) -> QString {
@@ -644,19 +679,10 @@ impl qobject::GenomeController {
 
     /// Rebuild the frame and status line.
     fn refresh(mut self: Pin<&mut Self>) {
-        self.as_mut().find_update(false);
-        let history = self.record_revision();
-        self.as_mut().set_history_revision(history);
-        if let Some(warning) =
-            crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
-        {
-            self.as_mut().set_message_kind(QString::from("error"));
-            self.as_mut().set_message(warning);
+        if !self.as_mut().refresh_start() {
+            return;
         }
         let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.doc(doc));
-        }
         let (bytes, status) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -720,114 +746,8 @@ impl qobject::GenomeController {
         self.as_mut().set_scroll_pos(pos);
     }
 
-    /// A neutral hint. Messages stay brief: say what happened, nothing more.
-    fn notify(mut self: Pin<&mut Self>, msg: &str) {
-        self.as_mut().set_message_kind(QString::default());
-        self.as_mut().set_message(QString::from(msg));
-    }
-
-    /// Something completed.
-    fn done(mut self: Pin<&mut Self>, msg: &str) {
-        self.as_mut().set_message_kind(QString::from("ok"));
-        self.as_mut().set_message(QString::from(msg));
-    }
-
-    /// Something failed.
-    fn fail(mut self: Pin<&mut Self>, msg: &str) {
-        self.as_mut().set_message_kind(QString::from("error"));
-        self.as_mut().set_message(QString::from(msg));
-    }
-
     pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
         self.export_figure(path, 0, false);
-    }
-
-    pub fn export_figure(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
-        self.export_figure_with(path, scope, publication, None);
-    }
-
-    pub fn export_figure_png(
-        self: Pin<&mut Self>,
-        path: &QString,
-        scope: i32,
-        publication: bool,
-        width: f64,
-    ) {
-        self.export_figure_with(path, scope, publication, Some(width));
-    }
-
-    fn export_figure_with(
-        mut self: Pin<&mut Self>,
-        path: &QString,
-        scope: i32,
-        publication: bool,
-        png_width: Option<f64>,
-    ) {
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.doc(doc));
-        }
-        if !(0..=2).contains(&scope) {
-            self.fail("Unknown figure scope");
-            return;
-        }
-        if scope == 1 && self.rust().view.selection.is_none() {
-            self.fail("Select a region or clade first");
-            return;
-        }
-        let target = PathBuf::from(path.to_string());
-        let result = (|| -> basecraft_ops::Result<()> {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return Ok(());
-            };
-            let theme = if publication {
-                crate::appearance::publication_theme()
-            } else {
-                r.theme.clone()
-            };
-            let mut view = r.view.clone();
-            let sequence = session.doc(doc)?;
-            if scope == 2 {
-                view.fit_doc(sequence);
-            }
-            if scope == 1 {
-                let (start, end) = view.selection.unwrap_or((0, sequence.len()));
-                view.mode = basecraft_viewmodel::genome::Mode::Linear;
-                #[allow(clippy::cast_precision_loss)]
-                {
-                    view.start = start as f64;
-                    view.bp_per_px = (end - start).max(1) as f64 / f64::from(view.width);
-                }
-                view.auto_fit = false;
-            }
-            if scope != 0 {
-                view.selection = None;
-                view.selection_parts = None;
-                view.selected = None;
-                view.cursor = None;
-            }
-            let mut frame = Frame::new();
-            view.build(sequence, &theme, &mut frame);
-            let svg = basecraft_viewmodel::svg::frame_svg(
-                &frame,
-                view.width,
-                view.height,
-                &r.mono_font.to_string(),
-                theme.background,
-            );
-            if let Some(width) = png_width {
-                let bytes = crate::figure_png::render(&svg, width)
-                    .map_err(basecraft_ops::Error::Invalid)?;
-                session.export(doc, &target, "png", |w| w.write_all(&bytes))
-            } else {
-                session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
-            }
-        })();
-        match result {
-            Ok(()) => self.done(&format!("Exported {}", file_name(&target))),
-            Err(e) => self.fail(&format!("Export failed: {e}")),
-        }
     }
 
     pub fn new_sequence_error(&self, name: &QString, text: &QString) -> QString {
@@ -874,33 +794,6 @@ impl qobject::GenomeController {
         self.as_mut().sync_mode();
         self.as_mut().refresh();
         QString::default()
-    }
-
-    pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        if self.rust().busy {
-            self.fail("Wait for the running operation before replacing this document");
-            return false;
-        }
-        self.as_mut().set_busy(true);
-        crate::document_open::open_file(self, path, |mut this, result| {
-            let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
-            this.as_mut().set_busy(false);
-            let ok = result.is_ok();
-            if let Err(error) = result {
-                this.as_mut().fail(&error.to_string());
-            }
-            this.opened(ok);
-        })
-    }
-
-    pub(crate) fn install_fresh(
-        self: Pin<&mut Self>,
-        candidate: crate::document_open::Candidate,
-    ) -> Result<(), crate::document_open::OpenError> {
-        if self.rust().session.is_some() || self.rust().doc.is_some() || self.rust().busy {
-            return Err(crate::document_open::OpenError::StaleIdentity);
-        }
-        self.install_opened(candidate)
     }
 
     pub(crate) fn install_opened(
@@ -1310,43 +1203,16 @@ impl qobject::GenomeController {
         }
     }
 
-    fn history(mut self: Pin<&mut Self>, redo: bool) {
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return;
-            };
-            if redo {
-                session.redo(doc)
-            } else {
-                session.undo(doc)
-            }
-        };
-        match result {
-            Ok(_) => {
-                let dirty =
-                    crate::document_open::unsaved(self.rust().session.as_ref(), self.rust().doc);
-                self.as_mut().set_dirty(dirty);
-                // Undoing or redoing makes the last message stale.
-                self.as_mut().notify("");
-            }
-            Err(e) => self.as_mut().notify(&e.to_string()),
-        }
-        self.as_mut().clamp_cursor();
-        self.refresh();
+    fn before_history(self: Pin<&mut Self>) -> bool {
+        true
+    }
+
+    fn after_history(self: Pin<&mut Self>) {
+        self.clamp_cursor();
     }
 
     pub fn state_alphabet(self: Pin<&mut Self>, answer: &QString) -> bool {
         crate::document_open::state_alphabet(self, &answer.to_string())
-    }
-
-    pub fn undo(self: Pin<&mut Self>) {
-        self.history(false);
-    }
-
-    pub fn redo(self: Pin<&mut Self>) {
-        self.history(true);
     }
 
     pub fn relative_path(&self, path: &QString) -> QString {
@@ -1359,10 +1225,6 @@ impl qobject::GenomeController {
             .or_else(|| path.strip_prefix(file_folder(&path)).ok())
             .unwrap_or(&path);
         QString::from(&rel.to_string_lossy().into_owned())
-    }
-
-    pub fn memory_report(&self) -> QString {
-        QString::from(&memory_text())
     }
 
     pub fn file_kind(&self, path: &QString) -> QString {
@@ -2315,9 +2177,6 @@ impl qobject::GenomeController {
         };
         let d = crate::bridge::checked_document!(access_thread, session.doc(doc));
         r.view.reveal(hit.start, d.len());
-    }
-    fn find_y(&self) -> f32 {
-        0.0
     }
 }
 
