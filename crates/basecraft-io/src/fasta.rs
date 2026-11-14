@@ -45,10 +45,7 @@ pub struct Summary {
 pub fn summary(path: &Path) -> Result<Summary> {
     let mut file = std::fs::File::open(path)?;
     let (summary, bytes) = scan_summary(&mut file)?;
-    #[cfg(feature = "test-counters")]
     crate::counters::record_read(path, bytes);
-    #[cfg(not(feature = "test-counters"))]
-    let _ = bytes;
     Ok(summary)
 }
 

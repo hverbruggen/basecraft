@@ -36,30 +36,6 @@ pub(crate) struct StagedRecord {
 }
 
 impl History<'_> {
-    /// Publish against the evidence frozen when the job was submitted.
-    pub(crate) fn analysis(
-        &self,
-        target: &Path,
-        inputs: &[(String, String)],
-        snapshot: &crate::records::document_record::DocumentRecord,
-    ) -> Result<()> {
-        let _scope = crate::records::input_evidence::lock_in(self.project)?;
-        if !self.tracked {
-            return Ok(());
-        }
-        let mut activity = self
-            .events()
-            .filter(|e| e.doc == self.key && matches!(e.op, Op::ToolRun { .. }))
-            .last()
-            .cloned()
-            .ok_or_else(|| invalid("analysis has no recorded activity"))?;
-        activity.result.hashes.retain(|pair| !inputs.contains(pair));
-        self.save(target, &activity, inputs, Some(snapshot))?
-            .write
-            .publish()
-            .map(|_| ())
-    }
-
     /// Every event of the document this session knows, oldest first.
     fn events(&self) -> impl Iterator<Item = &LogEntry> {
         self.recorded
@@ -73,14 +49,8 @@ impl History<'_> {
     /// record holds the events since the last save and links to its parent.
     /// Pending recovery baselines join the journal with the Save record, so
     /// they count as recorded events here.
-    pub(crate) fn save(
-        &self,
-        target: &Path,
-        save: &LogEntry,
-        analysis_inputs: &[(String, String)],
-        snapshot: Option<&crate::records::document_record::DocumentRecord>,
-    ) -> Result<StagedRecord> {
-        use basecraft_protocol::provenance::{ArtifactRevision, Completeness, EditActivity};
+    pub(crate) fn save(&self, target: &Path, save: &LogEntry) -> Result<StagedRecord> {
+        use basecraft_protocol::provenance::{ArtifactRevision, Completeness};
         let _scope = crate::records::input_evidence::lock_in(self.project)?;
         let bundle = if let Some(hidden) =
             crate::records::analysis_store::ArtifactRun::for_result(target)?
@@ -95,26 +65,16 @@ impl History<'_> {
             crate::records::provenance::companion(target)
         };
         std::fs::create_dir_all(bundle.join("artifacts"))?;
-        let source_bundle = snapshot.and_then(|r| r.origins.first()).map_or_else(
-            || self.origin_bundle.to_path_buf(),
-            |(path, _)| path.clone(),
-        );
+        let source_bundle = self.origin_bundle.to_path_buf();
         let mut previous_bundle = if bundle.join("manifest.json").exists() {
             &bundle
         } else {
             &source_bundle
         };
-        let mut previous = if snapshot.is_some() {
-            snapshot
-                .and_then(|r| r.origins.first())
-                .map(|(_, p)| p.clone())
-        } else {
-            crate::records::provenance::latest(previous_bundle)?.map(|(p, _)| p)
-        };
+        let mut previous = crate::records::provenance::latest(previous_bundle)?.map(|(p, _)| p);
         // A newly allocated output-support record is not the accepted document
         // history. Prefer the opened origin when the writer has just bound one.
-        if snapshot.is_none()
-            && previous_bundle != &source_bundle
+        if previous_bundle != &source_bundle
             && previous
                 .as_ref()
                 .is_some_and(|p| p.events.is_empty() && p.effective_edits.is_empty())
@@ -133,11 +93,9 @@ impl History<'_> {
             .and_then(|e| e.result.hashes.first())
             .map(|(_, hash)| hash);
         let previous = previous.filter(|p| {
-            snapshot.is_some()
-                || p.session == self.session
-                || p.outputs.first().map(|a| &a.hash) == baseline_hash
+            p.session == self.session || p.outputs.first().map(|a| &a.hash) == baseline_hash
         });
-        let mut parents = previous
+        let parents = previous
             .as_ref()
             .map(|p| vec![p.id.clone()])
             .unwrap_or_default();
@@ -238,7 +196,6 @@ impl History<'_> {
         let retain =
             |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
                 let bytes = std::fs::read(path)?;
-                #[cfg(feature = "test-counters")]
                 basecraft_io::counters::record_read(path, bytes.len() as u64);
                 if basecraft_io::hash_bytes(&bytes) != hash {
                     return Err(Error::ChangedOnDisk {
@@ -271,9 +228,7 @@ impl History<'_> {
                 .chain(self.pending)
                 .filter(|e| e.doc == self.key)
         };
-        for event in unsaved().filter(|e| {
-            snapshot.is_none_or(|r| r.document == self.key) && matches!(e.op, Op::Open { .. })
-        }) {
+        for event in unsaved().filter(|e| matches!(e.op, Op::Open { .. })) {
             for (key, hash) in &event.result.hashes {
                 inputs.push(ArtifactRevision {
                     id: format!("{}:input:{}", event.id, inputs.len()),
@@ -300,19 +255,6 @@ impl History<'_> {
                     "Sanger analysis record".into(),
                 )?);
             }
-        }
-        for (key, hash) in analysis_inputs {
-            let mut source =
-                crate::session::objects_dir(self.storage_root).join(hash.trim_start_matches("b3:"));
-            if !source.is_file() {
-                source = self.root.join(key);
-            }
-            inputs.push(retain(
-                &source,
-                hash,
-                format!("{}:submitted:{}", save.id, inputs.len()),
-                name(key),
-            )?);
         }
         let mut outputs = Vec::new();
         for (key, hash) in &save.result.hashes {
@@ -359,21 +301,6 @@ impl History<'_> {
             portable(event);
         }
         let mut current = self.effective.clone();
-        if matches!(save.op, Op::ToolRun { .. }) {
-            current.push(EditActivity {
-                id: save.id.clone(),
-                operation: save.op.clone(),
-            });
-        }
-        if let Some(snapshot) = snapshot {
-            events.clone_from(&snapshot.events);
-            events.push(save.clone());
-            current.clone_from(&snapshot.effective);
-            current.push(EditActivity {
-                id: save.id.clone(),
-                operation: save.op.clone(),
-            });
-        }
         events.iter_mut().for_each(portable);
         for activity in &mut current {
             redact_operation_paths(&mut activity.operation);
@@ -382,7 +309,6 @@ impl History<'_> {
         // now take effect, and parent edits undone since.
         let parent_effective: Vec<String> = match &previous {
             None => Vec::new(),
-            Some(_) if snapshot.is_some() => Vec::new(),
             Some(parent) => match self.known.iter().flatten().find(|(id, _)| *id == parent.id) {
                 Some((_, ids)) => ids.clone(),
                 None => {
@@ -407,36 +333,6 @@ impl History<'_> {
             .filter(|edit| !before.contains(&edit.id))
             .cloned()
             .collect();
-        if let Some(snapshot) = snapshot {
-            for (origin_bundle, origin) in &snapshot.origins {
-                if !parents.contains(&origin.id) {
-                    parents.push(origin.id.clone());
-                }
-                for input in &origin.inputs {
-                    if !inputs.iter().any(|a| a.id == input.id) {
-                        inputs.push(input.clone());
-                    }
-                }
-                if origin_bundle != &bundle {
-                    for folder in ["records", "artifacts"] {
-                        std::fs::create_dir_all(bundle.join(folder))?;
-                        for entry in std::fs::read_dir(origin_bundle.join(folder))? {
-                            let entry = entry?;
-                            if !entry.file_type()?.is_file() {
-                                return Err(invalid("ancestor contains a non-file record"));
-                            }
-                            let destination = bundle.join(folder).join(entry.file_name());
-                            if !destination.exists() {
-                                basecraft_io::write_atomic(&destination, |w| {
-                                    std::io::copy(&mut std::fs::File::open(entry.path())?, w)?;
-                                    Ok(())
-                                })?;
-                            }
-                        }
-                    }
-                }
-            }
-        }
         let mut parent_hashes = std::collections::BTreeMap::new();
         for parent in &parents {
             let path = crate::records::provenance::record_path(&bundle, parent)?;

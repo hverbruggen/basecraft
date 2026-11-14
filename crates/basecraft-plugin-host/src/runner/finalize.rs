@@ -2,7 +2,7 @@
 use super::{
     ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
     Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact,
-    Result, export_collection, file_tool, records, verify_collection,
+    Result, export_collection, records, verify_collection,
 };
 
 /// Files published into the project: destination, the run's copy if it
@@ -253,7 +253,7 @@ impl PreparedOperation {
                 if &staging != path {
                     std::fs::rename(path, &staging)?;
                 }
-                file_tool::publish_artifact(&self.run, &name, ArtifactDestination::Metadata)?;
+                self.run.publish(&name, ArtifactDestination::Metadata)?;
                 outcome.artifacts.push(PublishedArtifact {
                     role: role.clone(),
                     path: retained.display().to_string(),

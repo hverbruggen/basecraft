@@ -1,59 +1,8 @@
-//! Shared input freezing, support semantics, publication and Tasks cancellation.
+//! Shared input freezing, support semantics and publication.
 
 use std::path::{Path, PathBuf};
 
 use crate::{Error, Result};
-
-#[derive(Clone)]
-enum CancellationTarget {
-    Registered(crate::jobs::TaskCancellation),
-}
-
-static CANCELLATIONS: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, CancellationTarget>>,
-> = std::sync::OnceLock::new();
-
-fn cancellations()
--> &'static std::sync::Mutex<std::collections::HashMap<String, CancellationTarget>> {
-    CANCELLATIONS.get_or_init(std::sync::Mutex::default)
-}
-
-fn cancellation(id: &str) -> Option<CancellationTarget> {
-    cancellations()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(id)
-        .cloned()
-}
-
-pub fn can_cancel_run(id: &str) -> bool {
-    match cancellation(id) {
-        Some(CancellationTarget::Registered(handle)) => handle.can_cancel(),
-        None => false,
-    }
-}
-
-/// Only an active in-process owner can authorize cancellation. Registered runs
-/// use the manager's state lock and cancellation flag, never a retained path.
-pub fn cancel_run(id: &str) -> Result<()> {
-    match cancellation(id) {
-        Some(CancellationTarget::Registered(handle)) => handle.cancel(),
-        None => Err(Error::Protocol(
-            "Cancellation is unavailable for this run".into(),
-        )),
-    }
-}
-
-pub(crate) fn register_task_cancellation(
-    id: String,
-    handle: crate::jobs::TaskCancellation,
-) -> CancellationRegistration {
-    cancellations()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(id.clone(), CancellationTarget::Registered(handle));
-    CancellationRegistration(id)
-}
 
 /// Producer-declared support semantics win over numeric-range guesses.
 pub(crate) fn producer_support<'a>(
@@ -119,16 +68,6 @@ pub(crate) fn is_tree(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
 }
 
-pub(crate) struct CancellationRegistration(String);
-impl Drop for CancellationRegistration {
-    fn drop(&mut self) {
-        cancellations()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.0);
-    }
-}
-
 pub fn output_beside(file: &Path, suffix: &str, ext: &str) -> PathBuf {
     let dir = file.parent().unwrap_or(Path::new("."));
     let name = file
@@ -163,16 +102,6 @@ pub(crate) fn freeze_file(source: &Path, destination: &Path) -> Result<String> {
         return Err(Error::Protocol("input changed during submission".into()));
     }
     Ok(hash)
-}
-
-/// Both execution families promote only validated staging files through the
-/// common store's no-clobber primitive.
-pub(crate) fn publish_artifact(
-    run: &basecraft_ops::records::ArtifactRun,
-    name: &str,
-    location: basecraft_ops::records::ArtifactDestination,
-) -> Result<PathBuf> {
-    Ok(run.publish(name, location)?)
 }
 
 #[cfg(test)]

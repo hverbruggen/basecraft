@@ -338,6 +338,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log::failing::{Faults, fail};
     use basecraft_protocol::{Feature, delimitation::DelimitationEdit};
     use std::path::Path;
 
@@ -491,12 +492,18 @@ mod tests {
             let journal = journal_bytes(dir.path());
             let events = session.document_record(doc).unwrap().events.clone();
             let group = session.next_group;
-            let faults = &mut session.log.as_mut().unwrap().faults;
-            if sync_failure {
-                faults.sync = true;
+            let faults = if sync_failure {
+                Faults {
+                    sync: true,
+                    ..Default::default()
+                }
             } else {
-                faults.after_bytes = Some(127);
-            }
+                Faults {
+                    after_bytes: Some(127),
+                    ..Default::default()
+                }
+            };
+            fail(session.log.as_mut().unwrap(), faults);
             let ops = [remove("partition-1"), remove("partition-3")];
             assert!(apply(&mut session, doc, &ops).is_err());
             assert_eq!(session.delimitation(doc).unwrap(), &before);
@@ -527,9 +534,12 @@ mod tests {
         let (dir, mut session, doc) = fixture();
         session.track(doc).unwrap();
         let before = session.delimitation(doc).unwrap().clone();
-        let faults = &mut session.log.as_mut().unwrap().faults;
-        faults.after_bytes = Some(127);
-        faults.rollback_sync = true;
+        let faults = Faults {
+            after_bytes: Some(127),
+            rollback_sync: true,
+            ..Default::default()
+        };
+        fail(session.log.as_mut().unwrap(), faults);
         assert!(apply(&mut session, doc, &[remove("partition-1")]).is_err());
         assert!(dir.path().join("recovery-integrity-error.json").exists());
         assert!(apply(&mut session, doc, &[remove("partition-1")]).is_err());
@@ -580,7 +590,11 @@ mod tests {
         let actor = Actor::Agent {
             model: "proposal-test".into(),
         };
-        session.log.as_mut().unwrap().faults.after_bytes = Some(127);
+        let faults = Faults {
+            after_bytes: Some(127),
+            ..Default::default()
+        };
+        fail(session.log.as_mut().unwrap(), faults);
         assert!(
             session
                 .apply_sequence_proposals(doc, offer(0, 0, std::slice::from_ref(&op), &actor))

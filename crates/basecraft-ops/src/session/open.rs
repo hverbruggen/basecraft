@@ -29,10 +29,6 @@ impl Session {
     /// Unlike a separate [`files::kind`] probe, this does not reread the main
     /// file to classify it. Existing companion validation still applies.
     pub fn open_classified(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
-        self.open_inner(path)
-    }
-
-    pub(super) fn open_inner(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
         let format = files::Format::from_path(path)?;
         let captured = files::capture_load(self.companion_project(), path, format)?;
         let content = captured.content;
@@ -435,33 +431,10 @@ impl Session {
         Ok(Some((path, current, hash)))
     }
 
-    /// Use an accepted disk revision only for a clean, unchanged document.
-    pub fn referenced_source(
-        &self,
-        id: DocId,
-        bundle: &Path,
-    ) -> Result<Option<basecraft_protocol::provenance::InputReference>> {
-        self.saved_source(id)?
-            .map(|(path, stamp, hash)| {
-                Ok(basecraft_protocol::provenance::InputReference {
-                    path: crate::records::input_evidence::relative(bundle, &path)?,
-                    stamp,
-                    hash,
-                    extra: std::collections::BTreeMap::new(),
-                })
-            })
-            .transpose()
-    }
-
     pub fn snapshot_file(&self, path: &Path) -> Result<String> {
-        #[cfg(feature = "test-counters")]
-        {
-            let bytes = std::fs::read(path)?;
-            basecraft_io::counters::record_read(path, bytes.len() as u64);
-            self.snapshot_bytes(&bytes)
-        }
-        #[cfg(not(feature = "test-counters"))]
-        self.snapshot_bytes(&std::fs::read(path)?)
+        let bytes = std::fs::read(path)?;
+        basecraft_io::counters::record_read(path, bytes.len() as u64);
+        self.snapshot_bytes(&bytes)
     }
 
     /// Hash and retain the exact immutable buffer consumed by an analysis.

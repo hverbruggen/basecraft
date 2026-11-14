@@ -49,7 +49,6 @@ fn bounded_classifier_heap() {
             }
             file.flush().unwrap();
             drop(file);
-            #[cfg(feature = "test-counters")]
             basecraft_io::counters::reset();
             let measurement = basecraft_io::heap::Measurement::start().unwrap();
             let kind = files::kind(&path).unwrap();

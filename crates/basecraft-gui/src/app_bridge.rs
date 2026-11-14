@@ -768,18 +768,6 @@ impl qobject::DocumentOpens {
         }
         let path = request.path.clone();
         let cancelled = request.cancelled.clone();
-        #[cfg(test)]
-        let gate = barriers::take(&path);
-        #[cfg(test)]
-        let fault = faults::take(&path);
-        #[cfg(test)]
-        if fault == faults::Fault::Spawn {
-            self.reject(
-                id,
-                &OpenError::Spawn(std::io::Error::other("injected spawn failure")),
-            );
-            return;
-        }
         // Mark the dispatch before spawning, preventing a pending duplicate
         // from starting a second acquisition.
         if let Some(request) = self.as_mut().rust_mut().opens.requests.get_mut(&id) {
@@ -787,16 +775,12 @@ impl qobject::DocumentOpens {
         }
         let thread = self.qt_thread();
         let delivery_cancelled = cancelled.clone();
-        #[cfg(test)]
-        let completion_path = path.clone();
-        let spawned = crate::jobs::spawn("document-open", move || {
+        let hooks = open_hooks();
+        let worker_path = path.clone();
+        let work = move || {
+            let path = worker_path;
             let acquired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                #[cfg(test)]
-                if let Some(gate) = gate {
-                    gate.wait();
-                }
-                #[cfg(test)]
-                assert_ne!(fault, faults::Fault::Worker, "injected worker panic");
+                hooks.worker(&path);
                 Candidate::acquire(&path, &cancelled)
             }))
             .unwrap_or(Err(OpenError::Interrupted));
@@ -831,34 +815,17 @@ impl qobject::DocumentOpens {
                         Err(error) => this.reject(id, &error),
                     }
                 };
-                #[cfg(test)]
-                let queued = if fault == faults::Fault::Queue || fault == faults::Fault::DoubleQueue
-                {
-                    drop(delivery);
-                    Err(cxx_qt::ThreadingQueueError::InvokeMethodFailed)
-                } else {
-                    thread.queue(delivery)
-                };
-                #[cfg(not(test))]
-                let queued = thread.queue(delivery);
-                if queued.is_err() {
+                if hooks.deliver(&path, &thread, Box::new(delivery)).is_err() {
                     delivery_cancelled.store(true, std::sync::atomic::Ordering::Release);
                     // A failed invoke on a surviving endpoint gets one error
                     // delivery attempt. Destruction drops the candidate and
                     // the endpoint's request lifetimes without joining workers.
-                    #[cfg(test)]
-                    let retry = fault != faults::Fault::DoubleQueue;
-                    #[cfg(not(test))]
-                    let retry = true;
-                    if retry {
-                        let _ = thread.queue(move |this| this.reject(id, &OpenError::Queue));
-                    }
+                    let reject = move |this: Pin<&mut Self>| this.reject(id, &OpenError::Queue);
+                    let _ = hooks.deliver(&path, &thread, Box::new(reject));
                 }
-                #[cfg(test)]
-                barriers::finished(&completion_path);
             }
-        });
-        if let Err(error) = spawned {
+        };
+        if let Err(error) = hooks.spawn(&path, Box::new(work)) {
             self.reject(id, &OpenError::Spawn(error));
         }
     }
@@ -900,15 +867,7 @@ impl qobject::DocumentOpens {
             return false;
         }
         let installed_path = candidate.path.to_string_lossy().into_owned();
-        #[cfg(test)]
-        let identity = (
-            candidate.session.id().to_owned(),
-            candidate.doc,
-            candidate.session.generation(candidate.doc).unwrap(),
-            candidate.session.revision(candidate.doc).unwrap(),
-        );
-        #[cfg(all(test, feature = "test-counters"))]
-        testing::admitted(candidate.path.clone(), candidate.reads.clone());
+        open_hooks().installed(&candidate);
 
         // SAFETY: QML supplies a live QObject for this synchronous invocation;
         // no reference or raw pointer is dereferenced after returning to QML.
@@ -917,38 +876,17 @@ impl qobject::DocumentOpens {
             .as_mut()
             .downcast_pin::<crate::bridge::qobject::GenomeController>()
         {
-            {
-                let result = ctl.as_mut().install_fresh(candidate);
-                #[cfg(test)]
-                if result.is_ok() {
-                    assert_eq!(ctl.open_identity(), Some(identity));
-                }
-                result
-            }
+            ctl.as_mut().install_fresh(candidate)
         } else if let Some(mut ctl) = object
             .as_mut()
             .downcast_pin::<crate::alignment_bridge::qobject::AlignmentController>(
         ) {
-            {
-                let result = ctl.as_mut().install_fresh(candidate);
-                #[cfg(test)]
-                if result.is_ok() {
-                    assert_eq!(ctl.open_identity(), Some(identity));
-                }
-                result
-            }
+            ctl.as_mut().install_fresh(candidate)
         } else if let Some(mut ctl) = object
             .as_mut()
             .downcast_pin::<crate::tree_bridge::qobject::TreeController>()
         {
-            {
-                let result = ctl.as_mut().install_fresh(candidate);
-                #[cfg(test)]
-                if result.is_ok() {
-                    assert_eq!(ctl.open_identity(), Some(identity));
-                }
-                result
-            }
+            ctl.as_mut().install_fresh(candidate)
         } else {
             Err(OpenError::RouteMismatch)
         };
@@ -982,8 +920,7 @@ impl qobject::DocumentOpens {
             return false;
         }
         request.phase = Phase::Ready;
-        #[cfg(test)]
-        barriers::ready(&request.path);
+        open_hooks().ready(&request.path);
         true
     }
     fn activate(mut self: Pin<&mut Self>, value: &QString) {
@@ -1006,9 +943,10 @@ impl qobject::DocumentOpens {
 
     fn retire(mut self: Pin<&mut Self>, value: &QString) {
         if let Some(id) = token(value) {
-            #[cfg(test)]
-            if let Some(request) = self.rust().opens.requests.get(&id) {
-                barriers::retired(&request.path);
+            if let Some(hooks) = OPEN_HOOKS.get()
+                && let Some(request) = self.rust().opens.requests.get(&id)
+            {
+                hooks.retired(&request.path);
             }
             self.as_mut().rust_mut().opens.retire(id);
         }
@@ -1021,141 +959,44 @@ impl qobject::DocumentOpens {
     }
 }
 
-#[cfg(all(test, feature = "test-counters"))]
-pub(crate) mod testing {
-    use basecraft_io::counters::Counters;
-    use std::{cell::RefCell, path::PathBuf};
-    thread_local! {
-        static ADMISSIONS: RefCell<Vec<(PathBuf, Counters)>> = const { RefCell::new(Vec::new()) };
+type Delivery = Box<dyn FnOnce(Pin<&mut qobject::DocumentOpens>) + Send>;
+
+/// The steps of a document open that a test can block or fail. The window
+/// keeps the defaults; the bootstrap test sets its own in `OPEN_HOOKS`.
+pub(crate) trait OpenHooks: Sync {
+    /// Start the worker that reads the file. The worker ends once it has
+    /// handed its result over.
+    fn spawn(&self, _path: &str, work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+        crate::jobs::spawn("document-open", work)
     }
-    pub fn admitted(path: PathBuf, counts: Counters) {
-        ADMISSIONS.with(|all| all.borrow_mut().push((path, counts)));
+    /// On the worker, before it reads the file; a panic here fails the open.
+    fn worker(&self, _path: &str) {}
+    /// Queue a call on the window thread. The first call for an open comes
+    /// from its worker, right after it read the file.
+    fn deliver(
+        &self,
+        _path: &str,
+        thread: &cxx_qt::CxxQtThread<qobject::DocumentOpens>,
+        call: Delivery,
+    ) -> Result<(), cxx_qt::ThreadingQueueError> {
+        thread.queue(call)
     }
-    #[allow(dead_code)] // harness=false bootstrap consumes the audit.
-    pub fn take() -> Vec<(PathBuf, Counters)> {
-        ADMISSIONS.with(RefCell::take)
-    }
+    /// A read document was installed in its editor.
+    fn installed(&self, _candidate: &Candidate) {}
+    /// The editor acknowledged the document.
+    fn ready(&self, _path: &str) {}
+    /// The open request ended.
+    fn retired(&self, _path: &str) {}
 }
 
-#[cfg(test)]
-pub(crate) mod barriers {
-    use std::sync::{Arc, Condvar, Mutex, OnceLock};
-    pub struct Gate {
-        released: Mutex<bool>,
-        changed: Condvar,
-        finished: Mutex<bool>,
-        finish_changed: Condvar,
-    }
-    impl Gate {
-        pub fn wait(&self) {
-            let released = self.released.lock().unwrap();
-            let (released, timeout) = self
-                .changed
-                .wait_timeout_while(released, std::time::Duration::from_secs(10), |ready| {
-                    !*ready
-                })
-                .unwrap();
-            assert!(
-                *released && !timeout.timed_out(),
-                "open test barrier timed out"
-            );
-        }
-        fn release(&self) {
-            *self.released.lock().unwrap() = true;
-            self.changed.notify_all();
-        }
-    }
-    struct Held {
-        path: String,
-        release_path: String,
-        handed_out: bool,
-        gate: Arc<Gate>,
-    }
-    fn held() -> &'static Mutex<Option<Held>> {
-        static HELD: OnceLock<Mutex<Option<Held>>> = OnceLock::new();
-        HELD.get_or_init(|| Mutex::new(None))
-    }
-    #[allow(dead_code)] // driven by the harness=false bootstrap executable.
-    pub fn configure(path: String, release_path: String) {
-        *held().lock().unwrap() = Some(Held {
-            path,
-            release_path,
-            handed_out: false,
-            gate: Arc::new(Gate {
-                released: Mutex::new(false),
-                changed: Condvar::new(),
-                finished: Mutex::new(false),
-                finish_changed: Condvar::new(),
-            }),
-        });
-    }
-    pub fn take(path: &str) -> Option<Arc<Gate>> {
-        let mut held = held().lock().unwrap();
-        let state = held.as_mut()?;
-        if state.handed_out || state.path != path {
-            return None;
-        }
-        state.handed_out = true;
-        Some(state.gate.clone())
-    }
-    pub fn finished(path: &str) {
-        if let Some(state) = held().lock().unwrap().as_ref()
-            && state.path == path
-        {
-            *state.gate.finished.lock().unwrap() = true;
-            state.gate.finish_changed.notify_all();
-        }
-    }
-    #[allow(dead_code)] // used by the bootstrap lifetime test.
-    pub fn release_and_wait() {
-        let gate = held().lock().unwrap().as_ref().unwrap().gate.clone();
-        gate.release();
-        let finished = gate.finished.lock().unwrap();
-        let (finished, timeout) = gate
-            .finish_changed
-            .wait_timeout_while(finished, std::time::Duration::from_secs(10), |done| !*done)
-            .unwrap();
-        assert!(
-            *finished && !timeout.timed_out(),
-            "worker did not return after shell destruction"
-        );
-    }
-    pub fn ready(path: &str) {
-        if let Some(state) = held().lock().unwrap().as_ref()
-            && state.release_path == path
-        {
-            state.gate.release();
-        }
-    }
-    pub fn retired(path: &str) {
-        if let Some(state) = held().lock().unwrap().as_ref()
-            && state.path == path
-        {
-            state.gate.release();
-        }
-    }
-}
+struct WindowOpens;
+impl OpenHooks for WindowOpens {}
 
-#[cfg(test)]
-pub(crate) mod faults {
-    use std::{cell::RefCell, collections::BTreeMap};
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    pub enum Fault {
-        #[default]
-        None,
-        Spawn,
-        Worker,
-        Queue,
-        DoubleQueue,
-    }
-    thread_local! { static NEXT: RefCell<BTreeMap<String, Fault>> = const { RefCell::new(BTreeMap::new()) }; }
-    #[allow(dead_code)] // harness=false bootstrap sets fault cases.
-    pub fn set(path: String, fault: Fault) {
-        NEXT.with(|next| next.borrow_mut().insert(path, fault));
-    }
-    pub fn take(path: &str) -> Fault {
-        NEXT.with(|next| next.borrow_mut().remove(path).unwrap_or_default())
-    }
+pub(crate) static OPEN_HOOKS: std::sync::OnceLock<&'static dyn OpenHooks> =
+    std::sync::OnceLock::new();
+
+fn open_hooks() -> &'static dyn OpenHooks {
+    OPEN_HOOKS.get().copied().unwrap_or(&WindowOpens)
 }
 
 #[cfg(test)]

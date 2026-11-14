@@ -25,6 +25,31 @@ fn python_ready() -> bool {
     ok
 }
 
+fn bundled_registry(temp: &Path) -> Registry {
+    Registry::load(&RegistryConfig {
+        bundled: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
+        packages: temp.join("profile/plugins"),
+        index: temp.join("profile/index.json"),
+    })
+    .unwrap()
+}
+
+/// A FASTA with one 120-codon ORF, and a recoverable session over `root`.
+fn orf_session(temp: &Path, root: &Path, file: &Path) -> Session {
+    let mut seq = "C".repeat(10);
+    seq.push_str("ATG");
+    seq.push_str(&"AAA".repeat(120));
+    seq.push_str("TAA");
+    seq.push_str(&"C".repeat(200));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, format!(">orf\n{seq}\n")).unwrap();
+    let paths = basecraft_platform::paths::AppPaths::from_environment(|key| {
+        (key == "BASECRAFT_PROFILE_DIR").then(|| temp.join("profile").into_os_string())
+    })
+    .unwrap();
+    Session::recoverable_with_paths(root, &paths).unwrap()
+}
+
 fn run(
     jobs: &mut JobManager,
     registry: &Registry,
@@ -53,26 +78,10 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
         return;
     }
     let temp = tempfile::tempdir().unwrap();
-    let config = RegistryConfig {
-        bundled: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
-        packages: temp.path().join("profile/plugins"),
-        index: temp.path().join("profile/index.json"),
-    };
-    let registry = Registry::load(&config).unwrap();
+    let registry = bundled_registry(temp.path());
     let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
     let file = project.join("orf.fasta");
-    let mut seq = "C".repeat(10);
-    seq.push_str("ATG");
-    seq.push_str(&"AAA".repeat(120));
-    seq.push_str("TAA");
-    seq.push_str(&"C".repeat(200));
-    std::fs::write(&file, format!(">orf\n{seq}\n")).unwrap();
-    let paths = basecraft_platform::paths::AppPaths::from_environment(|key| {
-        (key == "BASECRAFT_PROFILE_DIR").then(|| temp.path().join("profile").into_os_string())
-    })
-    .unwrap();
-    let mut session = Session::recoverable_with_paths(&project, &paths).unwrap();
+    let mut session = orf_session(temp.path(), &project, &file);
     let doc = session.open(&file).unwrap();
     let mut jobs = JobManager::default().skipping_known_features();
 
@@ -105,12 +114,17 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
     assert!(run.join("runtime.json").is_file());
 
     // Methods names the genetic code the ORFs were read with.
-    let report = session.document_record(doc).unwrap().report().unwrap();
+    let record = session.document_record(doc).unwrap();
+    let report = record.report().unwrap();
     assert!(
         report.methods.contains("genetic_code = 11"),
         "{}",
         report.methods
     );
+    // A contributing step with no matching history event is refused.
+    let mut unmatched = record.clone();
+    unmatched.effective[0].id = "missing".into();
+    assert!(unmatched.report().is_err());
 
     session.save(doc, None).unwrap();
     // FASTA keeps its visible scientific GFF3 pair.
@@ -146,6 +160,35 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
     assert_eq!(reopened.doc.feature_count(), 1);
 }
 
+/// A saved result in a project subfolder finds its run record when read back
+/// as `basecraft report` reads it, with the project chosen.
+#[test]
+fn methods_of_a_saved_result_in_a_project_subfolder_come_from_its_run() {
+    crate::isolated_profile::isolate!();
+    if !python_ready() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let registry = bundled_registry(temp.path());
+    let root = temp.path().join("project");
+    let file = root.join("genes/orf.fasta");
+    let session = orf_session(temp.path(), &root, &file);
+    let project = basecraft_ops::project::Project::new(&root).unwrap();
+    let mut session = session.in_project(Some(project.clone()));
+    let doc = session.open(&file).unwrap();
+    let mut jobs = JobManager::default();
+    let outcome = run(&mut jobs, &registry, &mut session, doc);
+    assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
+    session.save(doc, None).unwrap();
+    drop(session);
+    let report = records::DocumentRecord::saved_report(&file, Some(&project)).unwrap();
+    assert!(
+        report.methods.contains("genetic_code = 11"),
+        "{}",
+        report.methods
+    );
+}
+
 /// Finding ORFs and predicting genes have no default genetic code: a
 /// request without one is refused before the plugin starts, on every route
 /// that submits it.
@@ -153,12 +196,7 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
 fn annotation_requests_without_a_genetic_code_are_refused() {
     crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
-    let registry = Registry::load(&RegistryConfig {
-        bundled: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
-        packages: temp.path().join("profile/plugins"),
-        index: temp.path().join("profile/index.json"),
-    })
-    .unwrap();
+    let registry = bundled_registry(temp.path());
     let file = temp.path().join("orf.fasta");
     std::fs::write(&file, ">orf\nATGAAATAA\n").unwrap();
     let mut session = Session::new(temp.path());

@@ -416,7 +416,6 @@ fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() 
         let doc = session.open(&path).unwrap();
         let before = session.delimitation(doc).unwrap().clone();
         let before_files = hint_files(dir.path());
-        #[cfg(feature = "test-counters")]
         basecraft_io::counters::reset();
         assert_eq!(workflow::linked_alignment(&session, doc).unwrap(), expected);
         #[cfg(feature = "test-counters")]

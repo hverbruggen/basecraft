@@ -2,7 +2,6 @@
 
 pub mod abif;
 pub mod archive;
-#[cfg(feature = "test-counters")]
 pub mod counters;
 pub mod fasta;
 pub mod genbank;
@@ -49,7 +48,6 @@ pub fn write_atomic_observed(
         f(&mut w)?;
         w.flush()?;
     }
-    #[cfg(feature = "test-counters")]
     counters::record_sync_all();
     tmp.as_file().sync_all()?;
     staged(tmp.as_file())?;
@@ -61,22 +59,14 @@ pub fn write_atomic_observed(
 /// BLAKE3 hash of a file's content, as `b3:<hex>`.
 pub fn hash_file(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)?;
-    hash_reader(
-        file,
-        #[cfg(feature = "test-counters")]
-        path,
-    )
+    hash_reader(file, path)
 }
 
 const HASH_BUFFER_SIZE: usize = 1 << 20;
 
-fn hash_reader(
-    mut reader: impl Read,
-    #[cfg(feature = "test-counters")] path: &Path,
-) -> Result<String> {
+fn hash_reader(mut reader: impl Read, path: &Path) -> Result<String> {
     let mut hasher = Hasher::new();
     let mut buffer = vec![0u8; HASH_BUFFER_SIZE];
-    #[cfg(feature = "test-counters")]
     let mut bytes_read = 0;
     loop {
         let count = match reader.read(&mut buffer) {
@@ -86,12 +76,8 @@ fn hash_reader(
             Err(error) => return Err(error.into()),
         };
         hasher.update(&buffer[..count]);
-        #[cfg(feature = "test-counters")]
-        {
-            bytes_read += count as u64;
-        }
+        bytes_read += count as u64;
     }
-    #[cfg(feature = "test-counters")]
     counters::record_read(path, bytes_read);
     Ok(hasher.finish())
 }
@@ -112,20 +98,15 @@ pub fn sha256_file(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut digest = Sha256::new();
     let mut buffer = vec![0u8; 64 * 1024];
-    #[cfg(feature = "test-counters")]
     let mut bytes_read = 0;
     loop {
         let count = file.read(&mut buffer)?;
         if count == 0 {
             break;
         }
-        #[cfg(feature = "test-counters")]
-        {
-            bytes_read += count as u64;
-        }
+        bytes_read += count as u64;
         digest.update(&buffer[..count]);
     }
-    #[cfg(feature = "test-counters")]
     counters::record_read(path, bytes_read);
     Ok(format!("{:x}", digest.finalize()))
 }
@@ -167,7 +148,6 @@ mod hash_tests {
         ] {
             let bytes: Vec<u8> = (0..size).map(|i| i.to_le_bytes()[0]).collect();
             std::fs::write(file.path(), &bytes).unwrap();
-            #[cfg(feature = "test-counters")]
             counters::reset();
             assert_eq!(hash_file(file.path()).unwrap(), hash_bytes(&bytes));
             #[cfg(feature = "test-counters")]
@@ -209,7 +189,6 @@ mod hash_tests {
 
     #[test]
     fn interrupted_short_reads_retry_and_partial_errors_do_not_count() {
-        #[cfg(feature = "test-counters")]
         let file = tempfile::NamedTempFile::new().unwrap();
         for fail_at_end in [false, true] {
             let bytes = b"deterministic content spanning several short reads".to_vec();
@@ -218,17 +197,11 @@ mod hash_tests {
                 interrupt: false,
                 fail_at_end,
             };
-            #[cfg(feature = "test-counters")]
             counters::reset();
-            let result = hash_reader(
-                reader,
-                #[cfg(feature = "test-counters")]
-                file.path(),
-            );
+            let result = hash_reader(reader, file.path());
             if fail_at_end {
                 assert!(matches!(result, Err(Error::Io(error))
                     if error.kind() == io::ErrorKind::PermissionDenied));
-                #[cfg(feature = "test-counters")]
                 assert_eq!(counters::snapshot(), counters::Counters::default());
             } else {
                 assert_eq!(result.unwrap(), hash_bytes(&bytes));
@@ -247,13 +220,11 @@ mod hash_tests {
     #[test]
     fn missing_file_preserves_io_error() {
         let dir = tempfile::tempdir().unwrap();
-        #[cfg(feature = "test-counters")]
         counters::reset();
         assert!(
             matches!(hash_file(&dir.path().join("missing")), Err(Error::Io(error))
             if error.kind() == io::ErrorKind::NotFound)
         );
-        #[cfg(feature = "test-counters")]
         assert_eq!(counters::snapshot(), counters::Counters::default());
     }
 
@@ -261,10 +232,8 @@ mod hash_tests {
     #[test]
     fn directory_read_fails_without_counting_success() {
         let dir = tempfile::tempdir().unwrap();
-        #[cfg(feature = "test-counters")]
         counters::reset();
         assert!(matches!(hash_file(dir.path()), Err(Error::Io(_))));
-        #[cfg(feature = "test-counters")]
         assert_eq!(counters::snapshot(), counters::Counters::default());
     }
 }
@@ -280,7 +249,6 @@ mod atomic_observation_tests {
         let path = dir.path().join("target");
         fs::write(&path, b"old").unwrap();
         let events = RefCell::new(Vec::new());
-        #[cfg(feature = "test-counters")]
         counters::reset();
         write_atomic_observed(
             &path,
@@ -311,7 +279,6 @@ mod atomic_observation_tests {
         assert_eq!(*events.borrow(), ["write", "staged", "persisted"]);
         #[cfg(feature = "test-counters")]
         let observed_counts = counters::snapshot();
-        #[cfg(feature = "test-counters")]
         counters::reset();
         write_atomic(&path, |w| w.write_all(b"legacy")).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"legacy");

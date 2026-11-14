@@ -273,26 +273,17 @@ impl ArtifactRun {
 impl ArtifactRun {
     /// Bounded, read-only discovery of current hidden bindings beside a result.
     pub fn for_result(result: &Path) -> Result<Option<PathBuf>> {
-        Self::resolve_result(result, false, None)
+        Self::resolve_result(result, None)
     }
 
-    /// Read association only when the binding describes these exact result bytes.
-    /// Save-time location discovery deliberately uses `for_result` instead.
-    pub fn for_result_checked(result: &Path) -> Result<Option<PathBuf>> {
-        Self::resolve_result(result, true, None)
+    /// The binding only when it describes result bytes with this hash; an
+    /// error when it describes other bytes or its run is missing. Save-time
+    /// location discovery uses `for_result` instead.
+    pub fn for_result_with_hash(result: &Path, hash: &str) -> Result<Option<PathBuf>> {
+        Self::resolve_result(result, Some(hash))
     }
 
-    /// Verify the same binding against bytes already owned by the caller.
-    /// Namespace, binding and run validation is shared with disk verification.
-    pub(crate) fn for_result_with_hash(result: &Path, hash: &str) -> Result<Option<PathBuf>> {
-        Self::resolve_result(result, true, Some(hash))
-    }
-
-    fn resolve_result(
-        result: &Path,
-        checked: bool,
-        snapshot_hash: Option<&str>,
-    ) -> Result<Option<PathBuf>> {
+    fn resolve_result(result: &Path, expected_hash: Option<&str>) -> Result<Option<PathBuf>> {
         let parent = result
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -355,16 +346,12 @@ impl ArtifactRun {
                 if value["schema_version"] != 1 || value["result"].as_str() != relative.to_str() {
                     return Err(invalid("unsupported or mismatched result binding"));
                 }
-                if checked {
-                    let hash = snapshot_hash.map_or_else(
-                        || basecraft_io::hash_file(result),
-                        |hash| Ok(hash.to_owned()),
-                    )?;
-                    if value["result_hash"].as_str() != Some(hash.as_str()) {
-                        return Err(invalid(
-                            "result contents differ from the hidden binding; metadata was not applied",
-                        ));
-                    }
+                if let Some(hash) = expected_hash
+                    && value["result_hash"].as_str() != Some(hash)
+                {
+                    return Err(invalid(
+                        "result contents differ from the hidden binding; metadata was not applied",
+                    ));
                 }
                 let id = value["run"]
                     .as_str()
@@ -372,7 +359,7 @@ impl ArtifactRun {
                 component(id)?;
                 let run = store.join("runs").join(id);
                 if !run.exists() {
-                    return if checked {
+                    return if expected_hash.is_some() {
                         Err(invalid(
                             "bound analysis run is missing; metadata was not applied",
                         ))

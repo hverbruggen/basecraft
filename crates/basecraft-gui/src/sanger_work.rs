@@ -221,7 +221,7 @@ fn execute(
     cancelled: &AtomicBool,
 ) -> Result<Completion, String> {
     check(cancelled)?;
-    let mut jobs = JobManager::default().with_task_cancellation();
+    let mut jobs = JobManager::default();
     let mut payload = String::new();
     let (session, path) = match request {
         Request::Prepare(paths, threshold) => {
@@ -266,8 +266,7 @@ fn execute(
                         return Err("Choose one trace to compute calls".into());
                     }
                     let source = &draft.inputs[0];
-                    let mut caller = basecraft_plugin_host::sanger_calls::SangerCaller::default()
-                        .with_task_cancellation();
+                    let mut caller = basecraft_plugin_host::sanger_calls::SangerCaller::default();
                     let started =
                         caller.start_captured(session.captured_inputs()?.remove(0), threshold)?;
                     let called = if let Some(called) = started {

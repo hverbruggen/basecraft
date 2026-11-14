@@ -688,7 +688,7 @@ impl Session {
         // append. None becomes visible until the Save record is durable.
         let history = self.tracked.then(|| {
             self.history(id)
-                .and_then(|history| history.save(target, &entry, &[], None))
+                .and_then(|history| history.save(target, &entry))
         });
         let (prepared, effective, mut history_error) = match history {
             Some(Ok(staged)) => (staged.write, Some(staged.effective), None),

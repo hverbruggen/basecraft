@@ -521,24 +521,6 @@ impl Session {
         }
     }
 
-    /// Other documents changed by the newest step of `id` that are not
-    /// saved, such as the metadata of a rename. Saving `id` alone leaves
-    /// them behind.
-    pub fn unsaved_partners(&self, id: DocId) -> Vec<DocId> {
-        let group = self
-            .docs
-            .get(id.0)
-            .and_then(|slot| slot.undo.last())
-            .and_then(|a| a.group);
-        group
-            .and_then(|g| self.group_docs.get(&g))
-            .into_iter()
-            .flatten()
-            .filter(|&&d| d != id.0 && !self.docs[d].is_clean())
-            .map(|&d| DocId(d))
-            .collect()
-    }
-
     /// Verify an explicitly named history target before changing anything. An empty
     /// target selects the latest edit in this session.
     pub fn apply_history(&mut self, id: DocId, op: &Op) -> Result<String> {

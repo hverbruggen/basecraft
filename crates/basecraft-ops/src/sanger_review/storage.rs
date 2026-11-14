@@ -623,11 +623,6 @@ impl SangerReview {
         &self.evidence.runs
     }
 
-    pub fn include_run(&mut self, run: &SangerRun) -> Result<(), String> {
-        self.evidence.runs.extend(run.evidence.runs.clone());
-        Ok(())
-    }
-
     pub(crate) fn share_captures(&mut self, previous: &Self) {
         if let Some(old) = std::iter::once(previous)
             .chain(&previous.retained)

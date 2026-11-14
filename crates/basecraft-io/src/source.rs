@@ -81,7 +81,6 @@ impl Source {
             consume(&block[..count])?;
             bytes.extend_from_slice(&block[..count]);
         }
-        #[cfg(feature = "test-counters")]
         crate::counters::record_read(path, bytes.len() as u64);
         Ok(Self(std::sync::Arc::new(bytes)))
     }
@@ -104,7 +103,6 @@ mod tests {
         let path = directory.path().join("source");
         for bytes in [b"".as_slice(), b"ACGT".as_slice()] {
             std::fs::write(&path, bytes).unwrap();
-            #[cfg(feature = "test-counters")]
             crate::counters::reset();
             let (source, hash) = Source::open_hashed(&path).unwrap();
             assert_eq!(hash, crate::hash_bytes(bytes));

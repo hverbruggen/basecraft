@@ -448,30 +448,6 @@ pub fn attach_display_tree(session: &mut Session, doc: DocId, tree: &Path) -> Re
     Ok(())
 }
 
-/// Apply an immutable method result to the current canonical workspace. GUI,
-/// CLI and MCP callers share roster validation and report identity semantics.
-pub fn add_analysis_result(
-    session: &mut Session,
-    doc: DocId,
-    output: &std::path::Path,
-) -> Result<serde_json::Value> {
-    let (value, edits) = analysis_result_edits(session, doc, output)?;
-    session.begin_group();
-    let applied = edits.into_iter().try_for_each(|edit| {
-        session
-            .apply(
-                doc,
-                Op::DelimitationEdit {
-                    edit: Box::new(edit),
-                },
-            )
-            .map(|_| ())
-    });
-    session.end_group();
-    applied?;
-    Ok(value)
-}
-
 /// Validate and plan result attachment before any typed changes. Job owners
 /// retain this plan and advance one edit at a time across repair attempts.
 pub fn analysis_result_edits(
