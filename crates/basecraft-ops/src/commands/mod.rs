@@ -50,6 +50,7 @@ pub enum Routes {
 
 /// One argument of a command.
 #[derive(Clone, Copy, Debug)]
+#[must_use]
 pub struct Arg {
     /// The MCP property, and on the command line `--name` with `-` for `_`.
     pub name: &'static str,
@@ -548,7 +549,7 @@ pub(super) fn wrong(name: &str, expected: &str) -> Error {
 
 /// What a client sees of a document. Fields a kind lacks are left out.
 #[derive(serde::Serialize)]
-struct State<'a> {
+struct DocumentView<'a> {
     document: usize,
     path: &'a str,
     kind: &'static str,
@@ -595,7 +596,7 @@ pub fn state(session: &Session, doc: DocId) -> Result<Value> {
         .as_ref()
         .is_some_and(|a| matches!(a.value, Alphabet::Mixed | Alphabet::Undetermined));
     let review = session.sanger_review(doc).ok();
-    let state = State {
+    let view = DocumentView {
         document: doc.0,
         path: session.doc_key(doc)?,
         kind,
@@ -626,7 +627,7 @@ pub fn state(session: &Session, doc: DocId) -> Result<Value> {
             })
             .transpose()?,
     };
-    Ok(serde_json::to_value(state)?)
+    Ok(serde_json::to_value(view)?)
 }
 
 /// JSON a person wrote: the text, `@FILE` for a file's contents, or `-` for

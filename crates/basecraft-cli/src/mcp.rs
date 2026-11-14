@@ -145,7 +145,7 @@ fn tool(command: &Command) -> Value {
 }
 
 /// A host tool that takes no table arguments.
-fn host_tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+fn host_tool(name: &str, description: &str, properties: &Value, required: &[&str]) -> Value {
     json!({"name": name, "description": description, "inputSchema": {"type": "object",
         "properties": properties, "required": required, "additionalProperties": false}})
 }
@@ -179,7 +179,7 @@ fn operation_tools(
         let mut metadata = host_tool(
             name,
             description,
-            json!({"job":{"type":"string"}}),
+            &json!({"job":{"type":"string"}}),
             &["job"],
         );
         metadata["outputSchema"] = outcome_schema()?;
@@ -188,19 +188,19 @@ fn operation_tools(
     definitions.push(host_tool(
         "basecraft.host.registry_refresh.v1",
         "Refresh installed metadata without running plugins.",
-        json!({}),
+        &json!({}),
         &[],
     ));
     definitions.push(host_tool(
         "basecraft.host.operations_list.v1",
         "List every installed operation with descriptor, pins, enabled state, origin and registry diagnostics, including operations this session cannot run. Same output as `basecraft operations list`.",
-        json!({}),
+        &json!({}),
         &[],
     ));
     definitions.push(host_tool(
         "basecraft.host.operations_describe.v1",
         "Describe one installed operation by ID (plugin/name@major). Same output as `basecraft operations describe`.",
-        json!({"operation":{"type":"string"}}),
+        &json!({"operation":{"type":"string"}}),
         &["operation"],
     ));
     for operation in registry

@@ -79,9 +79,10 @@ pub(super) const COMMANDS: &[Command] = &[
                 species, accession, column:NAME.")] },
     Command { name: "number-duplicates", writes: true, routes: All, run: number_duplicates,
         help: "Number duplicate record, row or tip names: `a`, `a` become `a.1`, `a.2`. An \
-                alignment or tree is renamed as one undoable edit; the records of another FASTA or \
-                GenBank file are renamed in the file itself, which must not be open. Links that \
-                named a duplicated name are listed for relinking.",
+                alignment or tree is renamed as one undoable edit. The records of another FASTA or \
+                GenBank file are renamed in the file itself, which must not be open; that change \
+                cannot be undone and is not in the file's history. Links that named a duplicated \
+                name are listed for relinking.",
         args: &[path("The file.")] },
     Command { name: "sanger review", writes: true, routes: All, run: sanger_review,
         help: "Start a review of a Sanger read (.ab1) from its instrument calls and save it as a \
@@ -176,7 +177,10 @@ fn edit(call: &mut Call) -> Result<Value> {
     let operations = super::live::operations(call, "operation")?;
     super::live::apply_all(call.session, doc, operations)?;
     // A reroot can leave labels on other groups; place them with tree.place_label.
-    let displaced = call.session.tree(doc).map(|tree| tree.displaced_labels());
+    let displaced = call
+        .session
+        .tree(doc)
+        .map(basecraft_docs::TreeDoc::displaced_labels);
     match displaced {
         Ok(displaced) if !displaced.is_empty() => {
             Ok(serde_json::to_value(super::Fields::from([(
@@ -316,7 +320,10 @@ fn sanger_export(call: &mut Call) -> Result<Value> {
     let output = call.path("output")?;
     let label = call.text("label")?.to_owned();
     call.session.export_sanger_consensus(doc, &output, &label)?;
-    Ok(json!({"consensus": output}))
+    Ok(serde_json::to_value(super::Fields::from([(
+        "consensus",
+        output,
+    )]))?)
 }
 
 fn sanger_add(call: &mut Call) -> Result<Value> {
@@ -402,7 +409,9 @@ fn provenance_verify(call: &mut Call) -> Result<Value> {
 fn provenance_package(call: &mut Call) -> Result<Value> {
     let output = call.path("output")?;
     records::package(&call.path("path")?, &output, call.session.project())?;
-    Ok(json!({"package": output}))
+    Ok(serde_json::to_value(super::Fields::from([(
+        "package", output,
+    )]))?)
 }
 
 fn replay(call: &mut Call) -> Result<Value> {

@@ -84,7 +84,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         words = format!("{words} {name}");
     }
     let command = commands::find(&table, &words).ok_or("unknown command")?;
-    run_command(command, matches, globals)
+    run_command(command, matches, &globals)
 }
 
 /// The clap command line made from the table.
@@ -208,7 +208,7 @@ fn first_folder(command: &Command, args: &Map<String, Value>) -> Option<PathBuf>
 fn run_command(
     command: &'static Command,
     matches: &ArgMatches,
-    globals: Globals,
+    globals: &Globals,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let project = globals
         .project

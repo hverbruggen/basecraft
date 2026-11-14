@@ -203,7 +203,9 @@ fn project_key(call: &Call, path: &std::path::Path) -> Result<String> {
 
 fn metadata_init(call: &mut Call) -> Result<Value> {
     let manifest = metadata::create(call.project()?.root())?;
-    Ok(json!({"manifest": manifest}))
+    Ok(serde_json::to_value(super::Fields::from([(
+        "manifest", manifest,
+    )]))?)
 }
 
 fn metadata_show(call: &mut Call) -> Result<Value> {
@@ -515,7 +517,9 @@ fn accession_table(call: &mut Call) -> Result<Value> {
     let submitter = submission::submitter_preference()?;
     let table = submission::accession_table(call.session, doc, &submitter)?;
     basecraft_io::write_atomic(&output, |w| w.write_all(&table))?;
-    Ok(json!({"output": output}))
+    Ok(serde_json::to_value(super::Fields::from([(
+        "output", output,
+    )]))?)
 }
 
 fn submitter(call: &mut Call) -> Result<Value> {
@@ -561,7 +565,8 @@ fn inclusion_presets(call: &mut Call) -> Result<Value> {
 
 fn linked_alignment(call: &mut Call) -> Result<Value> {
     let doc = call.doc("document")?;
-    Ok(json!({"path": delimitation::linked_alignment(call.session, doc)?}))
+    let path = delimitation::linked_alignment(call.session, doc)?;
+    Ok(serde_json::to_value(super::Fields::from([("path", path)]))?)
 }
 
 fn candidates(call: &mut Call) -> Result<Value> {
@@ -571,7 +576,8 @@ fn candidates(call: &mut Call) -> Result<Value> {
 }
 
 fn combined_name(call: &mut Call) -> Result<Value> {
-    Ok(json!({"path": delimitation::combined_path(&call.paths("paths")?)}))
+    let path = delimitation::combined_path(&call.paths("paths")?);
+    Ok(serde_json::to_value(super::Fields::from([("path", path)]))?)
 }
 
 fn combine(call: &mut Call) -> Result<Value> {
