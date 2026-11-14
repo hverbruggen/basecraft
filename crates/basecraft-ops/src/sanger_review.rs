@@ -981,7 +981,10 @@ mod moved_and_failed_recovery_tests {
                     choice: ReviewChoice::Edit('T'),
                 })
                 .unwrap();
-            assert!(review.save(&path).unwrap_err().code() == "analysis_input_conflict");
+            assert_eq!(
+                review.save(&path).unwrap_err().code(),
+                "analysis_input_conflict"
+            );
             assert_eq!(std::fs::read(&path).unwrap(), before);
             if policy == SavePolicy::PreserveCopy {
                 // Failed preservation must not publish new visible review bytes.

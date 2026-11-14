@@ -169,6 +169,7 @@ pub(crate) fn changed_on_disk(path: impl Into<PathBuf>) -> Error {
 impl Error {
     /// The single mapping shared by CLI, MCP, and registered operation jobs.
     pub fn operation_code(&self) -> basecraft_protocol::operation::OperationErrorCode {
+        use basecraft_platform::settings::Error as Preferences;
         use basecraft_protocol::operation::OperationErrorCode as Code;
         match self {
             Self::StaleRevision { .. } | Self::Outdated(_) => Code::StaleRevision,
@@ -176,29 +177,30 @@ impl Error {
             Self::NotFound { .. } | Self::FolderUnavailable { .. } | Self::NoMetadata => {
                 Code::NotFound
             }
-            Self::Damaged { .. }
-            | Self::Preferences(basecraft_platform::settings::Error::Invalid(_)) => Code::Damaged,
-            Self::Preferences(basecraft_platform::settings::Error::Busy) => Code::Busy,
-            Self::Preferences(basecraft_platform::settings::Error::Io(e)) => io_code(e),
-            Self::AppPaths(_) => Code::Unsupported,
-            Self::MissingChoice(_) => Code::MissingChoice,
-            Self::OutputConflict(_) => Code::OutputConflict,
+            Self::Damaged { .. } | Self::Preferences(Preferences::Invalid(_)) => Code::Damaged,
+            Self::Busy(_) | Self::Preferences(Preferences::Busy) => Code::Busy,
+            Self::Unsupported(_) | Self::AppPaths(_) => Code::Unsupported,
+            Self::OutputConflict(_)
+            | Self::Access(crate::access::AccessError::DestinationExists) => Code::OutputConflict,
+            Self::Limit { .. } | Self::Format(basecraft_io::Error::TooLarge(_)) => Code::Limit,
             Self::NotReady(_) => Code::NotReady,
             Self::Cancelled(_) => Code::Cancelled,
             Self::PackageNotRecorded(_) => Code::PublicationIncomplete,
-            Self::Limit { .. } => Code::Limit,
-            Self::Unsupported(_) => Code::Unsupported,
             Self::RecordNamesRepeat(_) => Code::RecordNamesRepeat,
             Self::NewerFieldsDropped(_) => Code::NewerFieldsDropped,
-            Self::Busy(_) => Code::Busy,
             Self::UnknownDocument { .. } => Code::UnknownDocument,
             Self::WrongKind { .. } => Code::WrongDocumentKind,
             Self::Access(crate::access::AccessError::Denied(_)) => Code::PermissionDenied,
-            Self::Access(crate::access::AccessError::DestinationExists) => Code::OutputConflict,
             Self::Access(crate::access::AccessError::Io(e))
             | Self::Io(e)
-            | Self::Format(basecraft_io::Error::Io(e)) => io_code(e),
-            Self::Format(basecraft_io::Error::TooLarge(_)) => Code::Limit,
+            | Self::Format(basecraft_io::Error::Io(e))
+            | Self::Preferences(Preferences::Io(e)) => {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    Code::PermissionDenied
+                } else {
+                    Code::IoError
+                }
+            }
             Self::Format(_) => Code::FormatError,
             Self::Json(_)
             | Self::Invalid(_)
@@ -210,7 +212,8 @@ impl Error {
                 | crate::delimitation::DisplayTreeError::NotOneTree { .. },
             )
             | Self::NotALabelField(_) => Code::InvalidArguments,
-            Self::NoProject(_)
+            Self::MissingChoice(_)
+            | Self::NoProject(_)
             | Self::DisplayTree(crate::delimitation::DisplayTreeError::NoneAttached) => {
                 Code::MissingChoice
             }
@@ -230,14 +233,5 @@ impl Error {
     /// Stable wire spelling; messages are for people, not dispatch.
     pub fn code(&self) -> &'static str {
         self.operation_code().as_str()
-    }
-}
-
-fn io_code(error: &std::io::Error) -> basecraft_protocol::operation::OperationErrorCode {
-    use basecraft_protocol::operation::OperationErrorCode as Code;
-    if error.kind() == std::io::ErrorKind::PermissionDenied {
-        Code::PermissionDenied
-    } else {
-        Code::IoError
     }
 }
