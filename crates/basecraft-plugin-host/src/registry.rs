@@ -56,7 +56,8 @@ pub struct Package {
 impl Package {
     pub fn verify(&self) -> Result<()> {
         if package_digest(&self.manifest.dir)? != self.digest {
-            return Err(Error::refused(Code::PluginChanged,
+            return Err(Error::refused(
+                Code::PluginChanged,
                 "package contents changed; refresh registry".into(),
             ));
         }
@@ -315,18 +316,20 @@ impl Registry {
 
     pub fn resolve(&self, id: &str, pins: Option<&OperationPins>) -> Result<&RegisteredOperation> {
         let operation = self.operations.get(id).ok_or_else(|| {
-            Error::refused(Code::PluginUnavailable,format!("unknown operation {id}"))
+            Error::refused(Code::PluginUnavailable, format!("unknown operation {id}"))
         })?;
         if !operation.package.enabled {
             return Err(Error::refused(Code::PluginDisabled, String::new()));
         }
         if pins.is_some_and(|p| p != &operation.pins(&self.generation)) {
-            return Err(Error::refused(Code::PluginChanged,
+            return Err(Error::refused(
+                Code::PluginChanged,
                 "stale registry pins; discover again".into(),
             ));
         }
         if operation.package.interpreter.is_none() {
-            return Err(Error::refused(Code::PluginUnavailable,
+            return Err(Error::refused(
+                Code::PluginUnavailable,
                 "configure BASECRAFT_PYTHON or install python3".into(),
             ));
         }
@@ -477,7 +480,8 @@ pub fn provision_bundled_with_pixi(config: &RegistryConfig, id: &str, pixi: &Pat
     let runtime = crate::runtime::provision_with(manifest, &digest, &root, pixi)?
         .ok_or_else(|| Error::Protocol("bundled runtime missing".into()))?;
     if package_digest(&manifest.dir)? != digest {
-        return Err(Error::refused(Code::PluginChanged,
+        return Err(Error::refused(
+            Code::PluginChanged,
             "bundled package changed during provisioning".into(),
         ));
     }
@@ -520,7 +524,8 @@ pub fn install_with_pixi(config: &RegistryConfig, source: &Path, pixi: &Path) ->
         std::fs::copy(file, target)?;
     }
     if package_digest(pending.path())? != digest {
-        return Err(Error::refused(Code::PluginChanged,
+        return Err(Error::refused(
+            Code::PluginChanged,
             "package changed during installation".into(),
         ));
     }

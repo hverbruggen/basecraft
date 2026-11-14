@@ -2,6 +2,7 @@
 use super::SaveCheck;
 use super::{DerivedTarget, DocId, Error, Op, OpResult, Path, Result, files, invalid};
 use super::{SaveDecision, SaveOutcome, Session};
+use crate::error::damaged;
 
 use super::SaveWarning;
 use crate::records::input_evidence::SavePolicy;
@@ -544,13 +545,13 @@ impl Session {
             self.docs[id.0].saved_target = Some((target.to_path_buf(), stamp, expected[0].clone()));
         }
         if main_written && now.as_ref() != before {
-            return Err(Error::Damaged {
-                path: target.into(),
-                detail: format!(
+            return Err(damaged(
+                target,
+                format!(
                     "data saved; provenance or sidecar incomplete: {error}. Recovery remains at {}",
                     self.storage_root.display()
                 ),
-            });
+            ));
         }
         Err(error)
     }
@@ -732,13 +733,13 @@ impl Session {
             self.recorded_save(id, target, &entry, effective);
         }
         if let Some(error) = history_error {
-            return Err(Error::Damaged {
-                path: target.into(),
-                detail: format!(
+            return Err(damaged(
+                target,
+                format!(
                     "data saved; history incomplete: {error}. Recovery remains at {}",
                     self.storage_root.display()
                 ),
-            });
+            ));
         }
         Ok(())
     }

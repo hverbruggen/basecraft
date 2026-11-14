@@ -19,8 +19,8 @@ pub fn effective_allocation() -> crate::Result<usize> {
     if configured != 0 {
         return Ok(configured.clamp(1, available()));
     }
-    let paths = basecraft_platform::paths::AppPaths::discover()
-        .map_err(basecraft_ops::Error::from)?;
+    let paths =
+        basecraft_platform::paths::AppPaths::discover().map_err(basecraft_ops::Error::from)?;
     let prefs = basecraft_platform::settings::SettingsStore::new(paths.preferences())
         .load()
         .map_err(basecraft_ops::Error::from)?;

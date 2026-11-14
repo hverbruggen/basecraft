@@ -3,6 +3,7 @@
 //! Seven payloads share identity, journal, undo and save ownership. Each payload
 //! supplies its own edits and serializer; scientific review history stays specialised.
 
+use crate::error::damaged;
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::FeatureId;
@@ -129,21 +130,16 @@ impl PreparedWrite {
             } else {
                 file.persist(&path)
             };
-            persisted.map_err(|error| crate::Error::Damaged {
-                path: path.clone(),
-                detail: format!("partial save: replaced {}; file replacement failed: {}. Keep the open document and retry saving", replaced.join(", "), error.error),
-            })?;
+            persisted.map_err(|error| damaged(path.clone(), format!("partial save: replaced {}; file replacement failed: {}. Keep the open document and retry saving", replaced.join(", "), error.error)))?;
             replaced.push(path.display().to_string());
         }
         for path in self.stale {
             match std::fs::remove_file(&path) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(crate::Error::Damaged {
+                    return Err(damaged(
                         path,
-                        detail: format!(
-                            "saved, but an outdated companion could not be removed: {error}"
-                        ),
-                    });
+                        format!("saved, but an outdated companion could not be removed: {error}"),
+                    ));
                 }
                 _ => {}
             }

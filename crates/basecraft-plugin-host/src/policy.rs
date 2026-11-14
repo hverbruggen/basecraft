@@ -1,9 +1,9 @@
 //! Caller-owned path/effect restrictions, shared by all operation adapters.
 //! This constrains host actions; trusted plugin code is not OS-sandboxed.
 
-use basecraft_protocol::operation::OperationErrorCode as Code;
 use basecraft_ops::access::{Access, AccessError, Denial, ResourceAction};
 use basecraft_platform::files::{identity, link_count};
+use basecraft_protocol::operation::OperationErrorCode as Code;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
@@ -221,7 +221,7 @@ impl SessionPolicy {
             .map_err(|error| match error {
                 AccessError::Denied(reason) => denied(&reason.to_string()),
                 AccessError::DestinationExists => {
-                    Error::refused(Code::OutputConflict,"destination already exists".into())
+                    Error::refused(Code::OutputConflict, "destination already exists".into())
                 }
                 AccessError::Io(error) => error.into(),
             })
@@ -364,7 +364,8 @@ impl SessionPolicy {
                 .keys()
                 .any(|k| destination_role(operation, k).is_none())
         {
-            return Err(Error::refused(Code::InvalidArguments,
+            return Err(Error::refused(
+                Code::InvalidArguments,
                 "unknown input/destination binding".into(),
             ));
         }
@@ -376,9 +377,10 @@ impl SessionPolicy {
             let values = request.inputs.get(name).map_or(&[][..], Vec::as_slice);
             count = count.saturating_add(values.len());
             if values.len() < binding.min || values.len() > binding.max || count > MAX_INPUT_FILES {
-                return Err(Error::refused(Code::InvalidArguments,format!(
-                    "input cardinality for {name}"
-                )));
+                return Err(Error::refused(
+                    Code::InvalidArguments,
+                    format!("input cardinality for {name}"),
+                ));
             }
             let mut files = Vec::new();
             let mut bound = Vec::new();
@@ -427,7 +429,8 @@ impl SessionPolicy {
                         .ok_or_else(|| denied("missing filename"))?,
                 );
             if !unique.insert(key) {
-                return Err(Error::refused(Code::OutputConflict,
+                return Err(Error::refused(
+                    Code::OutputConflict,
                     "destinations alias each other".into(),
                 ));
             }

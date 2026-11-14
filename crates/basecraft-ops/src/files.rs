@@ -1,5 +1,6 @@
 //! Opening and saving documents by file format.
 
+use crate::error::damaged;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -749,18 +750,15 @@ fn read_companion(
         )));
     }
     if companion.exchange_hash != exchange_hash {
-        return Err(Error::Damaged {
-            path: path.into(),
-            detail: "the file it describes was changed outside basecraft".into(),
-        });
+        return Err(damaged(
+            path,
+            "the file it describes was changed outside basecraft",
+        ));
     }
     if let Some(tree) = tree
         && companion.tree.as_ref().map(|t| &t.tree_hash) != Some(&tree_hash(tree))
     {
-        return Err(Error::Damaged {
-            path: path.into(),
-            detail: "Tree metadata describes a different tree".into(),
-        });
+        return Err(damaged(path, "Tree metadata describes a different tree"));
     }
     Ok(companion)
 }
@@ -1642,10 +1640,8 @@ fn load_delimitation_bytes(
     let mut warning = None;
     if let Some(source) = captured_side {
         let side = read_companion(companion, source.bytes(), exchange_hash, None).and_then(|c| {
-            c.delimitation.ok_or_else(|| Error::Damaged {
-                path: companion.to_path_buf(),
-                detail: "the companion holds no species workspace".into(),
-            })
+            c.delimitation
+                .ok_or_else(|| damaged(companion, "the companion holds no species workspace"))
         });
         match side {
             Ok(side) => {

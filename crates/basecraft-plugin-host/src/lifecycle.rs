@@ -124,8 +124,8 @@ impl Lifecycle {
         if !self.external() {
             return Ok(None);
         }
-        let paths = basecraft_platform::paths::AppPaths::discover()
-            .map_err(basecraft_ops::Error::from)?;
+        let paths =
+            basecraft_platform::paths::AppPaths::discover().map_err(basecraft_ops::Error::from)?;
         std::fs::create_dir_all(&paths.state)?;
         let lock = OpenOptions::new()
             .create(true)

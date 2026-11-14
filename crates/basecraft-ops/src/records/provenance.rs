@@ -1,4 +1,5 @@
 //! Inspectable portable save history. No bundle content is ever executed.
+use crate::error::damaged;
 use crate::{Result, error::invalid};
 use basecraft_protocol::{
     Actor, DocState, LogEntry, OpResult,
@@ -224,10 +225,10 @@ pub fn verify_export(destination: &Path, hash: &str, receipt: &Path) -> Result<(
         || receipt.size != metadata.len()
         || basecraft_io::hash_file(destination)? != hash
     {
-        return Err(crate::Error::Damaged {
-            path: destination.to_path_buf(),
-            detail: "output_conflict: member ownership or bytes changed; repair refused".into(),
-        });
+        return Err(damaged(
+            destination,
+            "output_conflict: member ownership or bytes changed; repair refused",
+        ));
     }
     Ok(())
 }
@@ -286,10 +287,10 @@ pub fn latest(bundle: &Path) -> Result<Option<(Publication, String)>> {
     }
     let (publication, hash) = read_publication(bundle, &pointer.id, &mut (64 << 20))?;
     if hash != pointer.hash {
-        return Err(crate::Error::Damaged {
-            path: record_path(bundle, &pointer.id)?,
-            detail: "the latest history record changed after it was saved".into(),
-        });
+        return Err(damaged(
+            record_path(bundle, &pointer.id)?,
+            "the latest history record changed after it was saved",
+        ));
     }
     Ok(Some((publication, hash)))
 }

@@ -1,6 +1,7 @@
 //! Append-only JSON Lines log, one stream per machine, rotated monthly:
 //! `<project>/.basecraft/log/<host>/<YYYY-MM>.jsonl`.
 
+use crate::error::damaged;
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -126,12 +127,12 @@ impl LogWriter {
                     )?;
                     let _ =
                         basecraft_io::write_atomic(&self.poison_marker, |w| w.write_all(&bytes));
-                    return Err(crate::Error::Damaged {
-                        path: self.poison_marker.clone(),
-                        detail: format!(
+                    return Err(damaged(
+                        self.poison_marker.clone(),
+                        format!(
                             "journal write failed ({error}); rollback durability is uncertain; inspect recovery before continuing"
                         ),
-                    });
+                    ));
                 }
                 return Err(error.into());
             }
@@ -175,10 +176,7 @@ impl LogWriter {
         for file in &old {
             let segment = verified_prefix(file)?;
             if let Some(problem) = segment.problem {
-                return Err(crate::Error::Damaged {
-                    path: file.clone(),
-                    detail: problem,
-                });
+                return Err(damaged(file.clone(), problem));
             }
             kept.extend(segment.entries.into_iter().filter(|entry| keep(entry)));
         }
@@ -278,10 +276,10 @@ impl Lines {
             let mut line = serde_json::to_vec(&value)?;
             // The offset holds only while keys sort and `_checksum` is first.
             if !line.starts_with(br#"{"_checksum":""#) || line.get(at - 1) != Some(&b',') {
-                return Err(crate::Error::Damaged {
-                    path: "journal".into(),
-                    detail: "journal line does not start with its checksum".into(),
-                });
+                return Err(damaged(
+                    "journal",
+                    "journal line does not start with its checksum",
+                ));
             }
             line.push(b'\n');
             lines.lines.push((line, at));
@@ -393,10 +391,10 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, 
                             if let Some(sequence) = value["_sequence"].as_u64() {
                                 let expected = sequences.entry(stream_of(&file)).or_insert(0);
                                 if sequence != *expected {
-                                    return Err(crate::Error::Damaged {
-                                        path: file.clone(),
-                                        detail: "journal sequence gap or reordered segment".into(),
-                                    });
+                                    return Err(damaged(
+                                        file.clone(),
+                                        "journal sequence gap or reordered segment",
+                                    ));
                                 }
                                 *expected += 1;
                             }
@@ -408,10 +406,7 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, 
                         }
                         Err(_) if lenient => skipped += 1,
                         Err(e) => {
-                            return Err(crate::Error::Damaged {
-                                path: file.clone(),
-                                detail: e.to_string(),
-                            });
+                            return Err(damaged(file.clone(), e.to_string()));
                         }
                     }
                 }

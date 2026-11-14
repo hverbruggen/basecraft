@@ -705,7 +705,11 @@ impl qobject::SangerController {
                 .as_mut()
                 .ok_or_else(|| none_open("No review is open"))?;
             session.select_call_set(&id.to_string())?;
-            session_view(session.review().ok_or_else(|| none_open("No review is open"))?)
+            session_view(
+                session
+                    .review()
+                    .ok_or_else(|| none_open("No review is open"))?,
+            )
         })()
         .map_err(|e| crate::document_open::edit_failure(&e));
         match result {
@@ -1168,8 +1172,8 @@ impl qobject::SangerController {
         self.as_mut().rust_mut().stage = None;
         self.as_mut().set_busy(false);
         self.as_mut().set_calling(false);
-        let result = result
-            .and_then(|(view, review)| Ok((view, work::ReviewDocument::new(&review)?)));
+        let result =
+            result.and_then(|(view, review)| Ok((view, work::ReviewDocument::new(&review)?)));
         match result {
             Ok((mut review, session)) => {
                 self.as_mut().cancel_calls();
@@ -1206,7 +1210,11 @@ impl qobject::SangerController {
         let path = PathBuf::from(path.to_string());
         let result = (|| -> basecraft_ops::Result<_> {
             let session = work::ReviewDocument::open(&path)?;
-            let view = session_view(session.review().ok_or_else(|| none_open("No review is open"))?)?;
+            let view = session_view(
+                session
+                    .review()
+                    .ok_or_else(|| none_open("No review is open"))?,
+            )?;
             Ok((view, session))
         })()
         .map_err(|e| e.to_string());
@@ -1269,8 +1277,7 @@ impl qobject::SangerController {
                 .to_string_lossy()
                 .into_owned();
             let mut paths = vec![source];
-            let additional: Vec<String> =
-                serde_json::from_str(&additional_paths_json.to_string())?;
+            let additional: Vec<String> = serde_json::from_str(&additional_paths_json.to_string())?;
             paths.extend(additional);
             Ok(paths)
         })()

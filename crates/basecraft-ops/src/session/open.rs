@@ -1,6 +1,7 @@
 //! Document loading and baseline tracking.
 use super::Session;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid};
+use crate::error::damaged;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct SavedMark(pub(super) Option<String>);
@@ -176,11 +177,8 @@ impl Session {
         recovery_directory(&directory)?;
         let stage = tempfile::tempdir_in(&directory)?;
         let key = &self.docs[id.0].key;
-        let local =
-            crate::records::replay::scratch_key(key).map_err(|detail| crate::Error::Damaged {
-                path: self.storage_root.clone(),
-                detail,
-            })?;
+        let local = crate::records::replay::scratch_key(key)
+            .map_err(|detail| damaged(self.storage_root.clone(), detail))?;
         let target = stage.path().join(&local);
         let original = self.resolve(key);
         if let Some(parent) = target.parent() {
@@ -256,10 +254,7 @@ impl Session {
             files::Loaded::Tree(opened) => opened.doc.restore_node_ids(&source.node_ids),
             _ => Ok(()),
         };
-        result.map_err(|error| crate::Error::Damaged {
-            path: self.root.clone(),
-            detail: error.to_string(),
-        })
+        result.map_err(|error| damaged(self.root.clone(), error.to_string()))
     }
 
     pub(super) fn note_changed_on_disk(&mut self, id: DocId) {

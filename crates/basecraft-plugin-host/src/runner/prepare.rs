@@ -1,11 +1,11 @@
 //! Preparation stages: capture session bindings, freeze input bytes, then allocate ledgers.
-use basecraft_protocol::operation::OperationErrorCode as Code;
 use super::{
     Arc, ArtifactRevision, ArtifactRun, BTreeMap, DocumentTarget, Error, ExecutionFamily,
     InputReference, InputView, InvocationContext, InvocationInputEvidence, OperationRequest, Path,
     PathBuf, PreparedOperation, RegisteredOperation, Result, SequenceTarget, SessionPolicy, Value,
     captures, contract, records, sources_from_upstream,
 };
+use basecraft_protocol::operation::OperationErrorCode as Code;
 use basecraft_protocol::operation::{Alphabet, QueryPreparation};
 
 struct GeneratedInput {
@@ -30,23 +30,30 @@ fn check_alphabet(
     if !accepted.is_empty()
         && let Some(refusal) = refusal
     {
-        return Err(Error::refused(Code::UnsupportedInput,format!(
-            "{shown}: {refusal}"
-        )));
+        return Err(Error::refused(
+            Code::UnsupportedInput,
+            format!("{shown}: {refusal}"),
+        ));
     }
     if !accepted.is_empty() && !accepted.contains(&found) {
         let wanted: Vec<_> = accepted.iter().map(Alphabet::to_string).collect();
-        return Err(Error::refused(Code::UnsupportedInput,format!(
-            "{} needs {} sequences, and {shown} holds {found} sequences",
-            operation.descriptor.title,
-            wanted.join(" or "),
-        )));
+        return Err(Error::refused(
+            Code::UnsupportedInput,
+            format!(
+                "{} needs {} sequences, and {shown} holds {found} sequences",
+                operation.descriptor.title,
+                wanted.join(" or "),
+            ),
+        ));
     }
     if *alphabets.entry(name.into()).or_insert(found) != found {
-        return Err(Error::refused(Code::UnsupportedInput,format!(
-            "{} needs the documents in {name} to share one alphabet",
-            operation.descriptor.title
-        )));
+        return Err(Error::refused(
+            Code::UnsupportedInput,
+            format!(
+                "{} needs the documents in {name} to share one alphabet",
+                operation.descriptor.title
+            ),
+        ));
     }
     Ok(())
 }
@@ -84,7 +91,8 @@ fn document_view(
             "canonical-newick-v1",
             "nwk",
         )),
-        _ => Err(Error::refused(Code::UnsupportedInput,
+        _ => Err(Error::refused(
+            Code::UnsupportedInput,
             "document kind does not match the input view".into(),
         )),
     }
@@ -154,7 +162,8 @@ fn prepare_inputs(
                     );
                     let checked = session.checked_sequence(id)?;
                     if session.generation(id)? != *generation || checked.version() != *revision {
-                        return Err(Error::refused(Code::StaleRevision,
+                        return Err(Error::refused(
+                            Code::StaleRevision,
                             "snapshot target changed".into(),
                         ));
                     }
@@ -214,7 +223,8 @@ fn prepare_inputs(
                             || session.generation(id)? != binding.generation
                             || session.revision(id)? != binding.revision
                         {
-                            return Err(Error::refused(Code::StaleRevision,
+                            return Err(Error::refused(
+                                Code::StaleRevision,
                                 "input document changed".into(),
                             ));
                         }
@@ -222,7 +232,9 @@ fn prepare_inputs(
                             session
                                 .alignment(id)?
                                 .validate_aligned_input()
-                                .map_err(|error| Error::refused(Code::UnsupportedInput, error.to_string()))?;
+                                .map_err(|error| {
+                                    Error::refused(Code::UnsupportedInput, error.to_string())
+                                })?;
                         }
                         input_record.include_input(&session.document_record(id)?);
                         let saved = session.saved_source(id)?;
@@ -276,10 +288,10 @@ fn prepare_inputs(
                 }
                 let generated_count: usize = generated.values().map(Vec::len).sum();
                 if generated_count > 1 {
-                    return Err(Error::refused(Code::UnsupportedInput,
-                    "save the document before combining it with other inputs"
-                        .into(),
-                ));
+                    return Err(Error::refused(
+                        Code::UnsupportedInput,
+                        "save the document before combining it with other inputs".into(),
+                    ));
                 }
             }
             bindings
@@ -310,7 +322,8 @@ fn prepare_target(
             Some(match reference {
                 InputReference::File { path } => {
                     if !policy.document_write {
-                        return Err(Error::refused(Code::PermissionDenied,
+                        return Err(Error::refused(
+                            Code::PermissionDenied,
                             "saving a target document needs writes".into(),
                         ));
                     }
@@ -329,7 +342,8 @@ fn prepare_target(
                         || session.generation(id)? != *generation
                         || session.revision(id)? != *revision
                     {
-                        return Err(Error::refused(Code::StaleRevision,
+                        return Err(Error::refused(
+                            Code::StaleRevision,
                             "target document changed".into(),
                         ));
                     }
@@ -400,11 +414,14 @@ pub fn recorded_request(
         .as_ref()
         .map(|r| r.lock_digest.as_str());
     if installed != recorded {
-        return Err(Error::refused(Code::PluginChanged,format!(
-            "the run used runtime lock {}, and the installed runtime has {}",
-            recorded.unwrap_or("none"),
-            installed.unwrap_or("none")
-        )));
+        return Err(Error::refused(
+            Code::PluginChanged,
+            format!(
+                "the run used runtime lock {}, and the installed runtime has {}",
+                recorded.unwrap_or("none"),
+                installed.unwrap_or("none")
+            ),
+        ));
     }
     request.pins = Some(pins);
     for reference in request
@@ -726,10 +743,9 @@ fn freeze_inputs(
                     let alphabet = (doc.alphabet().value, doc.alphabet_refusal());
                     check_alphabet(operation, &name, alphabet, &shown, alphabets)?;
                     if binding.view == InputView::AlignedFasta {
-                        alignment
-                            .doc
-                            .validate_aligned_input()
-                            .map_err(|error| Error::refused(Code::UnsupportedInput, error.to_string()))?;
+                        alignment.doc.validate_aligned_input().map_err(|error| {
+                            Error::refused(Code::UnsupportedInput, error.to_string())
+                        })?;
                         basecraft_ops::files::write_alignment(&alignment.doc, &mut output)?;
                     } else {
                         basecraft_ops::files::write_ungapped(&alignment.doc, &mut output)?;

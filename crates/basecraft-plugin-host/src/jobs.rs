@@ -469,7 +469,8 @@ impl JobManager {
             && let Some((existing, id)) = self.requests.get(key)
         {
             if existing != &digest {
-                return Err(Error::refused(OperationErrorCode::InvalidArguments,
+                return Err(Error::refused(
+                    OperationErrorCode::InvalidArguments,
                     "request key reused with different inputs".into(),
                 ));
             }
@@ -927,7 +928,10 @@ fn finalize_document(
     if target.save && !progress.saved {
         if let Some(generation) = progress.generation {
             if session.generation(target.doc)? != generation {
-                return Err(Error::refused(OperationErrorCode::StaleRevision,"target changed after result attachment; save remains incomplete".into()));
+                return Err(Error::refused(
+                    OperationErrorCode::StaleRevision,
+                    "target changed after result attachment; save remains incomplete".into(),
+                ));
             }
             session.save(target.doc, None)?;
         }
@@ -947,7 +951,8 @@ fn finalize_document(
         && progress.terminal_history != TerminalHistory::Published
     {
         if progress.generation != Some(session.generation(target.doc)?) {
-            return Err(Error::refused(OperationErrorCode::StaleRevision,
+            return Err(Error::refused(
+                OperationErrorCode::StaleRevision,
                 "target changed before terminal history publication".into(),
             ));
         }
@@ -1130,8 +1135,9 @@ pub fn error_code(error: &Error) -> OperationErrorCode {
     use crate::contract::ContractError;
     match error {
         Error::Ops(error) => ops_error_code(error),
-        Error::Io(error) => basecraft_ops::Error::Io(std::io::Error::from(error.kind()))
-            .operation_code(),
+        Error::Io(error) => {
+            basecraft_ops::Error::Io(std::io::Error::from(error.kind())).operation_code()
+        }
         Error::Contract(ContractError::UnknownSetting { .. }) => OperationErrorCode::UnknownSetting,
         Error::Contract(ContractError::MissingSetting { .. }) => OperationErrorCode::MissingChoice,
         Error::Contract(ContractError::Rejected(_)) => OperationErrorCode::IncompatibleContract,

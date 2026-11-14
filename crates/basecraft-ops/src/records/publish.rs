@@ -1,4 +1,5 @@
 //! Provenance publication from a session's document history.
+use crate::error::damaged;
 use crate::error::invalid;
 use crate::{Error, Result};
 use basecraft_protocol::provenance::Publication;
@@ -205,10 +206,7 @@ impl History<'_> {
                 if !dest.exists() {
                     basecraft_io::write_atomic(&dest, |w| w.write_all(&bytes))?;
                 } else if basecraft_io::hash_file(&dest)? != hash {
-                    return Err(Error::Damaged {
-                        path: dest,
-                        detail: "retained artifact hash differs".into(),
-                    });
+                    return Err(damaged(dest, "retained artifact hash differs"));
                 }
                 Ok(ArtifactRevision {
                     id: revision,

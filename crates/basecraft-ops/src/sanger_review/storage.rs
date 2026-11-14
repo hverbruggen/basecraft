@@ -137,10 +137,10 @@ impl SourceAccess for Source {
             }
             (None, None) => self.path.clone(),
             _ => {
-                return Err(crate::Error::Damaged {
-                    path: self.path.clone(),
-                    detail: "Incomplete Sanger input reference".into(),
-                });
+                return Err(damaged(
+                    self.path.clone(),
+                    "Incomplete Sanger input reference",
+                ));
             }
         };
         Ok(path)
@@ -606,8 +606,7 @@ impl SangerReview {
         path: &Path,
         project: Option<&crate::project::Project>,
     ) -> crate::Result<()> {
-        let placement: SangerPlacement =
-            super::read_evidence(path, SangerPlacement::validate)?;
+        let placement: SangerPlacement = super::read_evidence(path, SangerPlacement::validate)?;
         let context = source(
             &placement.source_path,
             &placement.source_sha256,
@@ -760,8 +759,7 @@ impl SangerReview {
     }
 
     pub fn attach_placement(&mut self, run: &SangerRun, path: &Path) -> crate::Result<()> {
-        let placement: SangerPlacement =
-            super::read_evidence(path, SangerPlacement::validate)?;
+        let placement: SangerPlacement = super::read_evidence(path, SangerPlacement::validate)?;
         let context = run
             .evidence
             .sources
@@ -1289,12 +1287,14 @@ impl SangerReview {
     }
 
     pub(crate) fn bind_session_review(target: &Path, run: &ArtifactRun) -> crate::Result<()> {
-        run.bind(target).map_err(|error| crate::Error::Damaged {
-            path: target.into(),
-            detail: format!(
-                "review data saved; binding incomplete: {error}; repair evidence: {}",
-                run.directory().display()
-            ),
+        run.bind(target).map_err(|error| {
+            damaged(
+                target,
+                format!(
+                    "review data saved; binding incomplete: {error}; repair evidence: {}",
+                    run.directory().display()
+                ),
+            )
         })
     }
 }

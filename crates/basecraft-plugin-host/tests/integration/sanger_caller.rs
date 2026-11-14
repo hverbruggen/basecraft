@@ -181,15 +181,13 @@ fn the_caller_service_returns_checks_reuses_and_refuses_drafts() {
         .unwrap() = u32::MAX;
     record(&misplaced);
     assert!(caller.start(&source, &sha256, 17).unwrap().is_none());
-    assert!(
-        matches!(
-            called(&mut caller),
-            Err(basecraft_plugin_host::Error::Refused {
-                code: basecraft_protocol::operation::OperationErrorCode::PluginProtocolViolation,
-                ..
-            })
-        )
-    );
+    assert!(matches!(
+        called(&mut caller),
+        Err(basecraft_plugin_host::Error::Refused {
+            code: basecraft_protocol::operation::OperationErrorCode::PluginProtocolViolation,
+            ..
+        })
+    ));
     record(&recorded);
 
     // A cancelled run is detached; a source replaced mid-run gives no draft,

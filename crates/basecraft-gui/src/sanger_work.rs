@@ -148,24 +148,26 @@ fn operation(
     let accepted = jobs.submit(&registry, request, policy, "GUI")?;
     // The shared wait drives the run; a detached session owns no document.
     let mut session = basecraft_ops::Session::detached(root);
-    let outcome = jobs
-        .wait_in_session(&accepted.run_id, &mut session, &|| {
-            cancelled.load(Ordering::Acquire)
-        })?;
+    let outcome = jobs.wait_in_session(&accepted.run_id, &mut session, &|| {
+        cancelled.load(Ordering::Acquire)
+    })?;
     check(cancelled)?;
     if outcome.state != RuntimeState::Completed {
         let code = outcome.errors.first().map_or(Code::ToolFailure, |e| e.code);
-        return Err(Error::refused(code, format!(
-            "{:?}: {}. Retained evidence: {}",
-            outcome.state,
-            outcome
-                .errors
-                .iter()
-                .map(|e| e.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; "),
-            outcome.evidence.as_deref().unwrap_or("unavailable")
-        )));
+        return Err(Error::refused(
+            code,
+            format!(
+                "{:?}: {}. Retained evidence: {}",
+                outcome.state,
+                outcome
+                    .errors
+                    .iter()
+                    .map(|e| e.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                outcome.evidence.as_deref().unwrap_or("unavailable")
+            ),
+        ));
     }
     Ok(outcome)
 }
@@ -314,11 +316,14 @@ fn execute(
                         serde_json::json!({"rows":[["probe",draft.consensus.replace('-',"")]],"orientation":true,"keep":true}),
                         cancelled,
                     )?;
-                    let value: serde_json::Value =
-                        serde_json::from_slice(&std::fs::read(artifact(&outcome, "addition.json")?)?)?;
+                    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(
+                        artifact(&outcome, "addition.json")?,
+                    )?)?;
                     if value["reversed"].as_array().is_some_and(|a| !a.is_empty()) {
                         if !session.automatic_only() {
-                            return Err(not_ready("This review already has decisions; open a fresh draft to change orientation"));
+                            return Err(not_ready(
+                                "This review already has decisions; open a fresh draft to change orientation",
+                            ));
                         }
                         let mut draft = session.working_draft()?.reverse_complemented();
                         draft.limitations.push(format!("Draft reverse-complemented for alignment context; source draft SHA-256 {}",session.draft_sha256));
@@ -382,7 +387,9 @@ fn execute(
                     session.attach_operation_run(directory(&outcome)?)?;
                 }
                 Request::Prepare(..) => {
-                    return Err(OpsError::Invalid("Unexpected nested preparation request".into()).into());
+                    return Err(
+                        OpsError::Invalid("Unexpected nested preparation request".into()).into(),
+                    );
                 }
             }
             (session, path)
@@ -520,7 +527,10 @@ pub(super) fn session_view(session: &SangerReview) -> basecraft_ops::Result<Sang
         let indexed = Arc::new(basecraft_io::fasta::IndexedFasta::open(&source)?);
         let alignment = AlignmentDoc::from_fasta(source.display().to_string(), &indexed);
         view.attach_alignment(placement, alignment)
-            .map_err(|detail| OpsError::Damaged { path: source, detail })?;
+            .map_err(|detail| OpsError::Damaged {
+                path: source,
+                detail,
+            })?;
     }
     Ok(view)
 }

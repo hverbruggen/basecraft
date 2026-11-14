@@ -385,7 +385,12 @@ pub(crate) fn start_listed<T, R: Outcome + Send + 'static, E: JobError>(
     work: impl FnOnce(&Work) -> Result<R, E> + Send + 'static,
     done: impl FnOnce(Pin<&mut T>, Result<R, E>) + Send + 'static,
 ) -> std::io::Result<Work> {
-    run(owner, Some((listing, Box::new(summarize::<R, E>))), work, done)
+    run(
+        owner,
+        Some((listing, Box::new(summarize::<R, E>))),
+        work,
+        done,
+    )
 }
 
 /// Run `task` with the document's Session moved off the window thread. The

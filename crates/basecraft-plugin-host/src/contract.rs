@@ -208,7 +208,9 @@ fn inspect_schema<'a>(
 ) -> Result<()> {
     *work += 1;
     if depth > MAX_NESTING || *work > 4096 {
-        return Err(rejected("schema nesting/reference expansion limit exceeded"));
+        return Err(rejected(
+            "schema nesting/reference expansion limit exceeded",
+        ));
     }
     if schema.is_boolean() {
         return Ok(());
@@ -224,9 +226,13 @@ fn inspect_schema<'a>(
                 }
             }
             "$ref" => {
-                let reference = value.as_str().ok_or_else(|| rejected("$ref must be text"))?;
+                let reference = value
+                    .as_str()
+                    .ok_or_else(|| rejected("$ref must be text"))?;
                 if !reference.starts_with("#/$defs/") || refs.contains(&reference) {
-                    return Err(rejected("only acyclic local $defs references are supported"));
+                    return Err(rejected(
+                        "only acyclic local $defs references are supported",
+                    ));
                 }
                 let target = root
                     .pointer(&reference[1..])

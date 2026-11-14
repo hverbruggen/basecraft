@@ -332,7 +332,9 @@ impl SangerReview {
         let stored: StoredCallSets =
             serde_json::from_value(value).map_err(|e| damaged(&e.to_string()))?;
         if stored.version != 3 {
-            return Err(Error::Unsupported("Unsupported Sanger review version".into()));
+            return Err(Error::Unsupported(
+                "Unsupported Sanger review version".into(),
+            ));
         }
         if stored.sets.is_empty() || stored.sets.len() > 32 {
             return Err(damaged("Invalid number of Sanger call sets"));
@@ -382,7 +384,9 @@ impl SangerReview {
             .canonicalize()?;
         let mut evidence = stored.evidence;
         if evidence.schema_version != 1 {
-            return Err(Error::Unsupported("Unsupported Sanger support version".into()));
+            return Err(Error::Unsupported(
+                "Unsupported Sanger support version".into(),
+            ));
         }
         evidence.map_paths(|p| Ok(parent.join(p)))?;
         let mut session = Self {
@@ -517,9 +521,9 @@ impl SangerReview {
     /// Export only a fully resolved specimen sequence. The output hash is a
     /// replayable operation; source AB1 and draft paths can never be replaced.
     pub(crate) fn write_consensus(&self, path: &Path, label: &str) -> Result<String> {
-        let sequence = self.resolved_sequence().ok_or_else(|| {
-            Error::NotReady("Resolve every review column before export".into())
-        })?;
+        let sequence = self
+            .resolved_sequence()
+            .ok_or_else(|| Error::NotReady("Resolve every review column before export".into()))?;
         if sequence.is_empty() {
             return Err(Error::NotReady("Resolved consensus is empty".into()));
         }
@@ -580,17 +584,14 @@ pub(crate) fn read_journal_record(
         || !record.hash.starts_with("b3:")
         || !record.hash[3..].bytes().all(|b| b.is_ascii_hexdigit())
     {
-        return Err(Error::Damaged {
-            path: record.path.clone(),
-            detail: "Invalid review record digest".into(),
-        });
+        return Err(damaged(record.path.clone(), "Invalid review record digest"));
     }
     let bytes = crate::records::provenance::read_record(&record.path)?;
     if basecraft_io::hash_bytes(&bytes) != record.hash {
-        return Err(Error::Damaged {
-            path: record.path.clone(),
-            detail: "Sanger analysis record changed".into(),
-        });
+        return Err(damaged(
+            record.path.clone(),
+            "Sanger analysis record changed",
+        ));
     }
     Ok(basecraft_protocol::records::decode(&bytes)?)
 }
@@ -928,11 +929,29 @@ mod moved_and_failed_recovery_tests {
         review.save(&path).unwrap();
         let symlink = folder.join("symlink.json");
         std::os::unix::fs::symlink(&path, &symlink).unwrap();
-        assert!(review.save(&symlink).unwrap_err().to_string().contains("symbolic link"));
+        assert!(
+            review
+                .save(&symlink)
+                .unwrap_err()
+                .to_string()
+                .contains("symbolic link")
+        );
         let hardlink = folder.join("hardlink.json");
         std::fs::hard_link(&path, &hardlink).unwrap();
-        assert!(review.save(&hardlink).unwrap_err().to_string().contains("hard links"));
-        assert!(review.save(&path).unwrap_err().to_string().contains("hard links"));
+        assert!(
+            review
+                .save(&hardlink)
+                .unwrap_err()
+                .to_string()
+                .contains("hard links")
+        );
+        assert!(
+            review
+                .save(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("hard links")
+        );
         std::fs::remove_file(&hardlink).unwrap();
         let parent_alias = tmp.path().join("alias");
         std::os::unix::fs::symlink(&folder, &parent_alias).unwrap();
@@ -971,13 +990,7 @@ mod moved_and_failed_recovery_tests {
                     choice: ReviewChoice::Edit('T'),
                 })
                 .unwrap();
-            assert!(
-                review
-                    .save(&path)
-                    .unwrap_err()
-                    .code()
-                    == "analysis_input_conflict"
-            );
+            assert!(review.save(&path).unwrap_err().code() == "analysis_input_conflict");
             assert_eq!(std::fs::read(&path).unwrap(), before);
             if policy == SavePolicy::PreserveCopy {
                 // Failed preservation must not publish new visible review bytes.

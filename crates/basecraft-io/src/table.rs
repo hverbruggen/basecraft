@@ -193,7 +193,9 @@ fn sheet_from_records(records: Vec<Vec<String>>, date_cells: &[(usize, usize)]) 
     let mut seen = std::collections::BTreeSet::new();
     for header in &headers {
         if !header.is_empty() && !seen.insert(header.as_str()) {
-            return Err(unreadable(format!("column header {header:?} appears twice")));
+            return Err(unreadable(format!(
+                "column header {header:?} appears twice"
+            )));
         }
     }
     let width = headers.len();
@@ -378,7 +380,9 @@ fn cell_text(value: calamine::Data) -> Result<(String, bool)> {
         Data::DateTime(value) => {
             let serial = value.as_f64();
             if !serial.is_finite() || !(0.0..3_000_000.0).contains(&serial) {
-                return Err(unreadable("a spreadsheet date is outside the supported range"));
+                return Err(unreadable(
+                    "a spreadsheet date is outside the supported range",
+                ));
             }
             let date = value
                 .as_datetime()

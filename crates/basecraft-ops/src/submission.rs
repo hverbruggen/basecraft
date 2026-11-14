@@ -55,13 +55,8 @@ pub fn load(path: &Path) -> Result<Submission> {
 }
 
 pub(crate) fn load_from(path: &Path, bytes: &[u8]) -> Result<Submission> {
-    let (sub, writer) =
-        basecraft_protocol::records::decode_written::<Submission>(bytes).map_err(|e| {
-            Error::Damaged {
-                path: path.to_path_buf(),
-                detail: format!("not a submission: {e}"),
-            }
-        })?;
+    let (sub, writer) = basecraft_protocol::records::decode_written::<Submission>(bytes)
+        .map_err(|e| damaged(path, format!("not a submission: {e}")))?;
     if sub.version != SUBMISSION_VERSION {
         return Err(Error::Unsupported(
             basecraft_protocol::records::other_format(&writer, sub.version, SUBMISSION_VERSION),
@@ -259,8 +254,7 @@ pub fn inclusion_preset_edit(
 pub fn save_inclusion_preset(session: &mut Session, rule: InclusionRule) -> Result<()> {
     // Validate before creating any metadata document.
     inclusion_preset_edit(&ProjectMetadata::default(), rule.clone())?;
-    let doc =
-        crate::metadata::open(session, true)?.ok_or(Error::NoMetadata)?;
+    let doc = crate::metadata::open(session, true)?.ok_or(Error::NoMetadata)?;
     let edit = inclusion_preset_edit(session.metadata(doc)?, rule)?;
     session.apply(
         doc,
@@ -342,9 +336,11 @@ pub fn project_metadata(project: &Path) -> Result<(ProjectMetadata, Option<Strin
 /// The submitter preference, from the user's settings.
 pub fn submitter_preference() -> Result<Submitter> {
     let paths = basecraft_platform::paths::AppPaths::discover()?;
-    Ok(basecraft_platform::settings::SettingsStore::new(paths.preferences())
-        .load()?
-        .submitter)
+    Ok(
+        basecraft_platform::settings::SettingsStore::new(paths.preferences())
+            .load()?
+            .submitter,
+    )
 }
 
 /// A review of a submission against its source alignment, the project
@@ -1406,13 +1402,13 @@ fn verified_reports(
         let project = crate::project::Project::new(root)?;
         let issues = crate::records::provenance::verify(&path, Some(&project))?;
         if !issues.is_empty() {
-            return Err(Error::Damaged {
-                path: path.clone(),
-                detail: format!(
+            return Err(damaged(
+                path.clone(),
+                format!(
                     "validation publication verification failed: {}",
                     issues.join("; ")
                 ),
-            });
+            ));
         }
     }
     // Only read files actually published by this run, including optional reports.

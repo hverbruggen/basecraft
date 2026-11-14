@@ -1,10 +1,10 @@
 //! Publish validated artifacts and retain an outcome for repair.
-use basecraft_protocol::operation::OperationErrorCode as Code;
 use super::{
     ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
     Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact,
     Result, records, verify_collection,
 };
+use basecraft_protocol::operation::OperationErrorCode as Code;
 
 /// Files published into the project: destination, the run's copy if it
 /// keeps one, and hash.
@@ -103,7 +103,8 @@ impl PreparedOperation {
                         .transpose()?;
                     let current = folder(&path)?;
                     if !repair || recorded.is_none_or(|known| known.identity != current) {
-                        return Err(Error::refused(Code::OutputConflict,
+                        return Err(Error::refused(
+                            Code::OutputConflict,
                             "collection destination exists".into(),
                         ));
                     }
@@ -145,7 +146,8 @@ impl PreparedOperation {
             } else {
                 if retained == staging || retained.exists() {
                     if retained != staging && (!repair || !intent.is_file()) {
-                        return Err(Error::refused(Code::OutputConflict,
+                        return Err(Error::refused(
+                            Code::OutputConflict,
                             "retained collection already exists".into(),
                         ));
                     }
@@ -218,10 +220,10 @@ impl PreparedOperation {
                 continue;
             }
             if !expected.contains_key(member) {
-                return Err(Error::refused(Code::InvalidArguments,format!(
-                    "{role} has no member {}",
-                    member.display()
-                )));
+                return Err(Error::refused(
+                    Code::InvalidArguments,
+                    format!("{role} has no member {}", member.display()),
+                ));
             }
             leaving.push((member.to_path_buf(), destination.clone()));
             // Component trees of a forest travel with their primary tree.

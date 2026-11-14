@@ -106,7 +106,9 @@ fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<Cal
             .last()
             .is_none_or(|position| *position as usize >= trace.samples())
     }) {
-        return Err(violation("Caller coordinates do not fit the original trace"));
+        return Err(violation(
+            "Caller coordinates do not fit the original trace",
+        ));
     }
     let run = verified.directory;
     draft.inputs[0].path.clone_from(&identity.source);
@@ -159,14 +161,12 @@ impl SangerCaller {
                 host.caller == Some(basecraft_protocol::operation::CallerKind::SingleTrace)
             })
         });
-        let operation = callers
-            .next()
-            .ok_or_else(|| {
-                refused(
-                    Code::PluginUnavailable,
-                    "Install a single-trace caller plugin to compute alternative calls",
-                )
-            })?;
+        let operation = callers.next().ok_or_else(|| {
+            refused(
+                Code::PluginUnavailable,
+                "Install a single-trace caller plugin to compute alternative calls",
+            )
+        })?;
         if callers.next().is_some() {
             return Err(refused(
                 Code::PluginUnavailable,
@@ -260,14 +260,12 @@ impl SangerCaller {
             target: None,
         };
         self.jobs = std::mem::take(&mut self.jobs).with_captured_inputs(vec![capture]);
-        let accepted = self
-            .jobs
-            .submit(
-                &registry,
-                request,
-                SessionPolicy::new(root, true)?,
-                "Automatic single-trace alternative calls",
-            )?;
+        let accepted = self.jobs.submit(
+            &registry,
+            request,
+            SessionPolicy::new(root, true)?,
+            "Automatic single-trace alternative calls",
+        )?;
         self.active = Some((accepted.run_id, identity));
         Ok(None)
     }
@@ -280,10 +278,7 @@ impl SangerCaller {
     }
 
     /// Block until the started call ends. Setting `cancelled` cancels it.
-    pub fn wait(
-        &mut self,
-        cancelled: &std::sync::atomic::AtomicBool,
-    ) -> Result<CalledDraft> {
+    pub fn wait(&mut self, cancelled: &std::sync::atomic::AtomicBool) -> Result<CalledDraft> {
         let (id, identity) = self
             .active
             .take()
