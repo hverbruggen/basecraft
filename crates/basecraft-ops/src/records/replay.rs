@@ -175,7 +175,7 @@ impl<'a> Replay<'a, '_> {
             self.problem(e, "document wasn't opened");
             return Ok(());
         };
-        if !self.apply(e, doc)? {
+        if !self.apply(e, doc) {
             return Ok(());
         }
         let state = self.session.state(doc)?;
@@ -280,7 +280,7 @@ impl<'a> Replay<'a, '_> {
     /// Apply or check one edit, save, extraction, undo or redo. False when an
     /// undo or redo reaches before a restart, which leaves the document
     /// uncheckable.
-    fn apply(&mut self, e: &'a LogEntry, doc: DocId) -> Result<bool> {
+    fn apply(&mut self, e: &'a LogEntry, doc: DocId) -> bool {
         match &e.op {
             // Species metadata records the original folder as its relocation
             // base. Hash against that destination, not replay's disposable root.
@@ -342,7 +342,7 @@ impl<'a> Replay<'a, '_> {
                         self.docs.remove(e.doc.as_str());
                         self.replaced.insert(&e.doc);
                         self.report.unchecked += 1;
-                        return Ok(false);
+                        return false;
                     }
                     Ok(replayed) => {
                         let target = self.ids.get(&replayed).cloned();
@@ -371,7 +371,7 @@ impl<'a> Replay<'a, '_> {
                 Err(err) => self.problem(e, err),
             },
         }
-        Ok(true)
+        true
     }
 }
 

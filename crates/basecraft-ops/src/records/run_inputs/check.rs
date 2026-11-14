@@ -302,7 +302,7 @@ fn scan_store(store: &Path, target: &Path, scan: &mut StoreScan, log: &mut Check
             }
             Ok(None) => {}
             Err(error) => {
-                log.issue_from(UncheckedKind::LedgerInvalid, &run.join("input.json"), error)
+                log.issue_from(UncheckedKind::LedgerInvalid, &run.join("input.json"), error);
             }
         }
     }
@@ -411,7 +411,11 @@ pub(super) fn inspect(target: &Path, stores: &[PathBuf], mut log: CheckLog) -> R
                 match depends_on_inspected(&run.join(path), &analyses, &mut log) {
                     Ok(found) => dependent |= found,
                     Err(error) => {
-                        log.issue_from(UncheckedKind::DependencyUnavailable, &run.join(path), error)
+                        log.issue_from(
+                            UncheckedKind::DependencyUnavailable,
+                            &run.join(path),
+                            error,
+                        );
                     }
                 }
             }

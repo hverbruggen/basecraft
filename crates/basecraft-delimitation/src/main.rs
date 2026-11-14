@@ -302,80 +302,13 @@ fn run(
         return Err("immutable input hash differs from request".into());
     }
     if request.method == "haplotypes" || request.method == "workspace_alignment" {
-        let index = basecraft_io::fasta::FastaIndex::build(&input_bytes)?;
-        let rows: Result<Vec<_>, Box<dyn std::error::Error>> = index
-            .records
-            .iter()
-            .map(|record| {
-                Ok((
-                    record.name.clone(),
-                    String::from_utf8(record.read(&input_bytes, 0, record.len)?)?,
-                ))
-            })
-            .collect();
-        if request.method == "workspace_alignment" {
-            result.workspace = Some(empty_workspace(
-                request,
-                rows?.iter().map(|(name, _)| name.clone()).collect(),
-                false,
-            )?);
-            return Ok(());
-        }
-        let haplotypes = basecraft_delimitation::haplotypes::deduplicate(&rows?)?;
-        let mut fasta = String::new();
-        for (name, sequence) in &haplotypes.unique {
-            fasta.push('>');
-            fasta.push_str(name);
-            fasta.push('\n');
-            fasta.push_str(sequence);
-            fasta.push('\n');
-        }
-        artifact(request, result, ".unique.fasta", fasta.as_bytes())?;
-        artifact(
-            request,
-            result,
-            ".haplotypes.json",
-            &serde_json::to_vec_pretty(&haplotypes)?,
-        )?;
-        result
-            .metrics
-            .insert("haplotypes".into(), serde_json::to_value(haplotypes)?);
-        return Ok(());
+        return alignment_method(request, result, &input_bytes);
     }
     if request.method == "asap" {
         return run_asap(request, result);
     }
     if request.method == "asap_import" {
-        use basecraft_protocol::delimitation::{HypothesisOrigin, Provenance};
-        let mut work = basecraft_io::spart::parse_xml(std::str::from_utf8(&input_bytes)?)?;
-        for (i, h) in work.hypotheses.iter_mut().enumerate() {
-            h.id = format!("{}-{i}", request.job_id);
-            h.origin = HypothesisOrigin::Inferred;
-            h.provenance = Provenance {
-                method: "ASAP".into(),
-                version: request
-                    .parameters
-                    .get("upstream_version")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("unknown")
-                    .into(),
-                inputs: [(request.input.clone(), request.input_hash.clone())].into(),
-                parameters: request.parameters.clone(),
-                seed: Some(request.seed),
-                workers: Some(1),
-                status: Some(JobStatus::Completed),
-                ..Provenance::default()
-            };
-            for score in &mut h.scores {
-                score.method = "ASAP".into();
-                score.scale = "ASAP rank score".into();
-                score.interpretation =
-                    "Weighted probability and barcode-gap rank; smaller ranks first".into();
-            }
-        }
-        work.view.visible = work.hypotheses.iter().map(|h| h.id.clone()).collect();
-        result.workspace = Some(work);
-        return Ok(());
+        return import_asap(request, result, &input_bytes);
     }
     let trees = basecraft_io::newick::parse_trees(std::str::from_utf8(&input_bytes)?)?;
     let parsed = trees
@@ -501,224 +434,318 @@ fn run(
                 .insert("conversion".into(), serde_json::to_value(converted)?);
         }
         "gmyc_single" | "gmyc_multiple" | "gmyc_exhaustive" => {
-            let mut time = basecraft_delimitation::time_tree::validate(&tree, rooted, true)?;
-            let clamp = request
-                .parameters
-                .get("reference_age_clamp")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true);
-            // Tips at zero distance from each other are fitted as one tip and
-            // restored afterwards; the published workspace keeps every tip.
-            let full = &tree;
-            let mut merged = BTreeMap::new();
-            let tree = match basecraft_delimitation::gmyc::collapse_zero_age(full, &time)? {
-                Some((collapsed, groups)) if !clamp => {
-                    // Keep the record of the user's tree; the collapsed one
-                    // is checked again for the fit.
-                    let full_diagnostics = std::mem::take(&mut time.diagnostics);
-                    time = basecraft_delimitation::time_tree::validate(&collapsed, rooted, true)?;
-                    time.diagnostics.splice(0..0, full_diagnostics);
-                    let tips: usize = groups.values().map(std::collections::BTreeSet::len).sum();
-                    time.diagnostics.push(format!(
-                        "{tips} tips in {} zero-age tree clades (zero distance within each clade); each clade was fitted as one tip and its members restored; no exact sequence identity is inferred",
-                        groups.len()
-                    ));
-                    result.metrics.insert(
-                        "zero_distance_groups".into(),
-                        serde_json::to_value(&groups)?,
-                    );
-                    merged = groups;
-                    collapsed
-                }
-                _ => full.clone(),
-            };
-            if clamp {
-                let mut changed = 0;
-                for &node in &time.events {
-                    if time.ages[node] < 1e-6 {
-                        time.ages[node] = 1e-6;
-                        changed += 1;
-                    }
-                }
-                time.root_height = time.ages[tree.root()];
-                time.diagnostics.push(format!("Explicit splits compatibility preprocessing: clamped {changed} internal node ages to 1e-6 input time units; original tree retained"));
-                result.metrics.insert(
-                    "reference_age_clamp".into(),
-                    serde_json::json!({"minimum_input_age":1e-6,"changed_nodes":changed}),
-                );
-            }
-            let cancel = request.cancel_file.as_deref().map(Path::new);
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(request.workers)
-                .build()?;
-            let budget = request
-                .parameters
-                .get("candidate_budget")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|n| usize::try_from(n).ok())
-                .unwrap_or(10_000);
-            let progress_state = std::sync::Mutex::new((0usize, Vec::new()));
-            let report_progress = |completed: usize, total: usize| {
-                let mut state = progress_state.lock().unwrap();
-                if completed >= state.0 {
-                    state.0 = completed;
-                    let phase = if request.method == "gmyc_single" {
-                        "GMYC threshold candidates"
-                    } else {
-                        "GMYC candidates / budget"
-                    };
-                    if let Err(error) = progress(request, phase, completed, total) {
-                        state.1.push(error.to_string());
-                    }
-                }
-            };
-            let mut fit = pool.install(|| match request.method.as_str() {
-                "gmyc_single" => basecraft_delimitation::gmyc::single_with_progress(
-                    &tree,
-                    &time,
-                    cancel,
-                    &report_progress,
-                ),
-                "gmyc_multiple" => basecraft_delimitation::gmyc::multiple_with_progress(
-                    &tree,
-                    &time,
-                    budget,
-                    cancel,
-                    &report_progress,
-                ),
-                _ => basecraft_delimitation::gmyc::exhaustive(&tree, &time, budget, cancel),
-            })?;
-            match request
-                .parameters
-                .get("reference_version")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("1.0-20")
-            {
-                "1.0-20" => {}
-                "1.1-dc187fd" => basecraft_delimitation::gmyc::use_newer_summary(&mut fit),
-                _ => return Err("unsupported GMYC reference version".into()),
-            }
-            if request
-                .parameters
-                .get("reference_age_clamp")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true)
-            {
-                fit.reference
-                    .push_str("; explicit recent-age compatibility clamp enabled");
-                fit.warnings.retain(|w| !w.starts_with("Recent-age clamp"));
-            }
-            result
-                .metrics
-                .insert("gmyc".into(), serde_json::to_value(&fit)?);
-            result.job.diagnostics.extend(time.diagnostics.clone());
-            result
-                .job
-                .diagnostics
-                .extend(progress_state.into_inner().unwrap().1);
-            result.job.diagnostics.extend(fit.warnings.clone());
-            if fit
-                .stopping_condition
-                .starts_with("candidate budget reached")
-            {
-                return Err(
-                    "multi-threshold search budget reached; no completed hypothesis published"
-                        .into(),
-                );
-            }
-            let best = &fit.profile[fit.best];
-            result.job.diagnostics.extend(best.diagnostics.clone());
-            // Publish every distinct partition in the support set (best first),
-            // so the alternatives GMYC cannot rule out are visible.
-            let mut ranked = fit.support_candidates.clone();
-            ranked.retain(|&i| i != fit.best);
-            ranked.sort_by(|&a, &b| {
-                fit.profile[b]
-                    .log_likelihood
-                    .total_cmp(&fit.profile[a].log_likelihood)
-                    .then(a.cmp(&b))
-            });
-            ranked.insert(0, fit.best);
-            let mut seen = std::collections::BTreeSet::new();
-            for index in ranked {
-                if seen.len() == 10 {
-                    break;
-                }
-                let candidate = &fit.profile[index];
-                let groups: Vec<std::collections::BTreeSet<String>> =
-                    basecraft_delimitation::gmyc::groups(&tree, &time, candidate)
-                        .into_iter()
-                        .map(|group| {
-                            group
-                                .into_iter()
-                                .flat_map(|tip| {
-                                    merged.get(&tip).cloned().unwrap_or_else(|| [tip].into())
-                                })
-                                .collect()
-                        })
-                        .collect();
-                if !seen.insert(
-                    groups
-                        .iter()
-                        .cloned()
-                        .collect::<std::collections::BTreeSet<_>>(),
-                ) {
-                    continue;
-                }
-                let rank = seen.len();
-                let name = format!(
-                    "GMYC species hypothesis {rank} ({} species, lnL {:.2})",
-                    groups.len(),
-                    candidate.log_likelihood
-                );
-                let mut work = workspace(request, full, groups, candidate.log_likelihood, name);
-                let hypothesis = &mut work.hypotheses[0];
-                hypothesis
-                    .attributes
-                    .insert("gmyc_rank".into(), rank.to_string());
-                hypothesis.attributes.insert(
-                    "gmyc_thresholds".into(),
-                    candidate
-                        .thresholds
-                        .iter()
-                        .map(f64::to_string)
-                        .collect::<Vec<_>>()
-                        .join(","),
-                );
-                match &mut result.workspace {
-                    None => result.workspace = Some(work),
-                    Some(published) => {
-                        let mut hypothesis = work.hypotheses.remove(0);
-                        hypothesis.id = format!("{}-{rank}", request.job_id);
-                        published.view.visible.push(hypothesis.id.clone());
-                        published.hypotheses.push(hypothesis);
-                    }
-                }
-            }
-            if let Some(work) = &mut result.workspace {
-                for hypothesis in &mut work.hypotheses {
-                    hypothesis
-                        .provenance
-                        .parameters
-                        .entry("reference_version".into())
-                        .or_insert_with(|| "1.0-20".into());
-                    hypothesis
-                        .provenance
-                        .parameters
-                        .entry("reference_age_clamp".into())
-                        .or_insert_with(|| false.into());
-                    hypothesis
-                        .provenance
-                        .parameters
-                        .insert("root_height".into(), time.root_height.into());
-                    hypothesis.provenance.parameters.insert(
-                        "sampling_policy".into(),
-                        "each retained tree tip once; multiplicity restored after fitting".into(),
-                    );
-                }
-            }
+            gmyc(request, result, &tree, rooted)?;
         }
         other => return Err(format!("unknown native method {other}").into()),
+    }
+    Ok(())
+}
+
+/// The alignment methods: deduplicate to haplotypes, or start an empty
+/// species workspace naming the alignment's sequences.
+fn alignment_method(
+    request: &DelimitationRequest,
+    result: &mut DelimitationResult,
+    input_bytes: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let index = basecraft_io::fasta::FastaIndex::build(input_bytes)?;
+    let rows: Result<Vec<_>, Box<dyn std::error::Error>> = index
+        .records
+        .iter()
+        .map(|record| {
+            Ok((
+                record.name.clone(),
+                String::from_utf8(record.read(input_bytes, 0, record.len)?)?,
+            ))
+        })
+        .collect();
+    if request.method == "workspace_alignment" {
+        result.workspace = Some(empty_workspace(
+            request,
+            rows?.iter().map(|(name, _)| name.clone()).collect(),
+            false,
+        )?);
+        return Ok(());
+    }
+    let haplotypes = basecraft_delimitation::haplotypes::deduplicate(&rows?)?;
+    let mut fasta = String::new();
+    for (name, sequence) in &haplotypes.unique {
+        fasta.push('>');
+        fasta.push_str(name);
+        fasta.push('\n');
+        fasta.push_str(sequence);
+        fasta.push('\n');
+    }
+    artifact(request, result, ".unique.fasta", fasta.as_bytes())?;
+    artifact(
+        request,
+        result,
+        ".haplotypes.json",
+        &serde_json::to_vec_pretty(&haplotypes)?,
+    )?;
+    result
+        .metrics
+        .insert("haplotypes".into(), serde_json::to_value(haplotypes)?);
+    Ok(())
+}
+
+/// Read an ASAP SPART result into a workspace, its partitions named as ASAP's.
+fn import_asap(
+    request: &DelimitationRequest,
+    result: &mut DelimitationResult,
+    input_bytes: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use basecraft_protocol::delimitation::{HypothesisOrigin, Provenance};
+    let mut work = basecraft_io::spart::parse_xml(std::str::from_utf8(input_bytes)?)?;
+    for (i, h) in work.hypotheses.iter_mut().enumerate() {
+        h.id = format!("{}-{i}", request.job_id);
+        h.origin = HypothesisOrigin::Inferred;
+        h.provenance = Provenance {
+            method: "ASAP".into(),
+            version: request
+                .parameters
+                .get("upstream_version")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+                .into(),
+            inputs: [(request.input.clone(), request.input_hash.clone())].into(),
+            parameters: request.parameters.clone(),
+            seed: Some(request.seed),
+            workers: Some(1),
+            status: Some(JobStatus::Completed),
+            ..Provenance::default()
+        };
+        for score in &mut h.scores {
+            score.method = "ASAP".into();
+            score.scale = "ASAP rank score".into();
+            score.interpretation =
+                "Weighted probability and barcode-gap rank; smaller ranks first".into();
+        }
+    }
+    work.view.visible = work.hypotheses.iter().map(|h| h.id.clone()).collect();
+    result.workspace = Some(work);
+    Ok(())
+}
+
+/// Fit GMYC (single, multiple or exhaustive) on the time tree read from `tree`.
+fn gmyc(
+    request: &DelimitationRequest,
+    result: &mut DelimitationResult,
+    tree: &basecraft_docs::TreeDoc,
+    rooted: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut time = basecraft_delimitation::time_tree::validate(tree, rooted, true)?;
+    let clamp = request
+        .parameters
+        .get("reference_age_clamp")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    // Tips at zero distance from each other are fitted as one tip and
+    // restored afterwards; the published workspace keeps every tip.
+    let full = tree;
+    let mut merged = BTreeMap::new();
+    let tree = match basecraft_delimitation::gmyc::collapse_zero_age(full, &time)? {
+        Some((collapsed, groups)) if !clamp => {
+            // Keep the record of the user's tree; the collapsed one
+            // is checked again for the fit.
+            let full_diagnostics = std::mem::take(&mut time.diagnostics);
+            time = basecraft_delimitation::time_tree::validate(&collapsed, rooted, true)?;
+            time.diagnostics.splice(0..0, full_diagnostics);
+            let tips: usize = groups.values().map(std::collections::BTreeSet::len).sum();
+            time.diagnostics.push(format!(
+                "{tips} tips in {} zero-age tree clades (zero distance within each clade); each clade was fitted as one tip and its members restored; no exact sequence identity is inferred",
+                groups.len()
+            ));
+            result.metrics.insert(
+                "zero_distance_groups".into(),
+                serde_json::to_value(&groups)?,
+            );
+            merged = groups;
+            collapsed
+        }
+        _ => full.clone(),
+    };
+    if clamp {
+        let mut changed = 0;
+        for &node in &time.events {
+            if time.ages[node] < 1e-6 {
+                time.ages[node] = 1e-6;
+                changed += 1;
+            }
+        }
+        time.root_height = time.ages[tree.root()];
+        time.diagnostics.push(format!("Explicit splits compatibility preprocessing: clamped {changed} internal node ages to 1e-6 input time units; original tree retained"));
+        result.metrics.insert(
+            "reference_age_clamp".into(),
+            serde_json::json!({"minimum_input_age":1e-6,"changed_nodes":changed}),
+        );
+    }
+    let cancel = request.cancel_file.as_deref().map(Path::new);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(request.workers)
+        .build()?;
+    let budget = request
+        .parameters
+        .get("candidate_budget")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(10_000);
+    let progress_state = std::sync::Mutex::new((0usize, Vec::new()));
+    let report_progress = |completed: usize, total: usize| {
+        let mut state = progress_state.lock().unwrap();
+        if completed >= state.0 {
+            state.0 = completed;
+            let phase = if request.method == "gmyc_single" {
+                "GMYC threshold candidates"
+            } else {
+                "GMYC candidates / budget"
+            };
+            if let Err(error) = progress(request, phase, completed, total) {
+                state.1.push(error.to_string());
+            }
+        }
+    };
+    let mut fit = pool.install(|| match request.method.as_str() {
+        "gmyc_single" => basecraft_delimitation::gmyc::single_with_progress(
+            &tree,
+            &time,
+            cancel,
+            &report_progress,
+        ),
+        "gmyc_multiple" => basecraft_delimitation::gmyc::multiple_with_progress(
+            &tree,
+            &time,
+            budget,
+            cancel,
+            &report_progress,
+        ),
+        _ => basecraft_delimitation::gmyc::exhaustive(&tree, &time, budget, cancel),
+    })?;
+    match request
+        .parameters
+        .get("reference_version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("1.0-20")
+    {
+        "1.0-20" => {}
+        "1.1-dc187fd" => basecraft_delimitation::gmyc::use_newer_summary(&mut fit),
+        _ => return Err("unsupported GMYC reference version".into()),
+    }
+    if request
+        .parameters
+        .get("reference_age_clamp")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        fit.reference
+            .push_str("; explicit recent-age compatibility clamp enabled");
+        fit.warnings.retain(|w| !w.starts_with("Recent-age clamp"));
+    }
+    result
+        .metrics
+        .insert("gmyc".into(), serde_json::to_value(&fit)?);
+    result.job.diagnostics.extend(time.diagnostics.clone());
+    result
+        .job
+        .diagnostics
+        .extend(progress_state.into_inner().unwrap().1);
+    result.job.diagnostics.extend(fit.warnings.clone());
+    if fit
+        .stopping_condition
+        .starts_with("candidate budget reached")
+    {
+        return Err(
+            "multi-threshold search budget reached; no completed hypothesis published".into(),
+        );
+    }
+    let best = &fit.profile[fit.best];
+    result.job.diagnostics.extend(best.diagnostics.clone());
+    // Publish every distinct partition in the support set (best first),
+    // so the alternatives GMYC cannot rule out are visible.
+    let mut ranked = fit.support_candidates.clone();
+    ranked.retain(|&i| i != fit.best);
+    ranked.sort_by(|&a, &b| {
+        fit.profile[b]
+            .log_likelihood
+            .total_cmp(&fit.profile[a].log_likelihood)
+            .then(a.cmp(&b))
+    });
+    ranked.insert(0, fit.best);
+    let mut seen = std::collections::BTreeSet::new();
+    for index in ranked {
+        if seen.len() == 10 {
+            break;
+        }
+        let candidate = &fit.profile[index];
+        let groups: Vec<std::collections::BTreeSet<String>> =
+            basecraft_delimitation::gmyc::groups(&tree, &time, candidate)
+                .into_iter()
+                .map(|group| {
+                    group
+                        .into_iter()
+                        .flat_map(|tip| merged.get(&tip).cloned().unwrap_or_else(|| [tip].into()))
+                        .collect()
+                })
+                .collect();
+        if !seen.insert(
+            groups
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+        ) {
+            continue;
+        }
+        let rank = seen.len();
+        let name = format!(
+            "GMYC species hypothesis {rank} ({} species, lnL {:.2})",
+            groups.len(),
+            candidate.log_likelihood
+        );
+        let mut work = workspace(request, full, groups, candidate.log_likelihood, name);
+        let hypothesis = &mut work.hypotheses[0];
+        hypothesis
+            .attributes
+            .insert("gmyc_rank".into(), rank.to_string());
+        hypothesis.attributes.insert(
+            "gmyc_thresholds".into(),
+            candidate
+                .thresholds
+                .iter()
+                .map(f64::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        match &mut result.workspace {
+            None => result.workspace = Some(work),
+            Some(published) => {
+                let mut hypothesis = work.hypotheses.remove(0);
+                hypothesis.id = format!("{}-{rank}", request.job_id);
+                published.view.visible.push(hypothesis.id.clone());
+                published.hypotheses.push(hypothesis);
+            }
+        }
+    }
+    if let Some(work) = &mut result.workspace {
+        for hypothesis in &mut work.hypotheses {
+            hypothesis
+                .provenance
+                .parameters
+                .entry("reference_version".into())
+                .or_insert_with(|| "1.0-20".into());
+            hypothesis
+                .provenance
+                .parameters
+                .entry("reference_age_clamp".into())
+                .or_insert_with(|| false.into());
+            hypothesis
+                .provenance
+                .parameters
+                .insert("root_height".into(), time.root_height.into());
+            hypothesis.provenance.parameters.insert(
+                "sampling_policy".into(),
+                "each retained tree tip once; multiplicity restored after fitting".into(),
+            );
+        }
     }
     Ok(())
 }
