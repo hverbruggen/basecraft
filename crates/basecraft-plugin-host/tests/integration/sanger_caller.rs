@@ -38,7 +38,7 @@ plugin.run()
 "#;
 
 /// A caller that hangs is cancelled after 60 s and fails the test.
-fn called(caller: &mut SangerCaller) -> Result<CalledDraft, String> {
+fn called(caller: &mut SangerCaller) -> basecraft_plugin_host::Result<CalledDraft> {
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let watchdog = cancel.clone();
     std::thread::spawn(move || {
@@ -182,10 +182,13 @@ fn the_caller_service_returns_checks_reuses_and_refuses_drafts() {
     record(&misplaced);
     assert!(caller.start(&source, &sha256, 17).unwrap().is_none());
     assert!(
-        called(&mut caller)
-            .err()
-            .unwrap()
-            .contains("do not fit the original trace")
+        matches!(
+            called(&mut caller),
+            Err(basecraft_plugin_host::Error::Refused {
+                code: basecraft_protocol::operation::OperationErrorCode::PluginProtocolViolation,
+                ..
+            })
+        )
     );
     record(&recorded);
 

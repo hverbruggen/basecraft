@@ -88,10 +88,14 @@ fn forest_members_share_one_alignment_snapshot() {
     let registry = common::bundled();
     let parameters = json!({"model":"p"});
     // A result never replaces its own input.
-    let refused = common::refused_in(&registry, &mut session, |s| {
+    let (code, refused) = common::refused_in(&registry, &mut session, |s| {
         tree_request(s, doc, &parameters, "forest.afa")
     });
-    assert!(refused.contains("output_conflict"), "{refused}");
+    assert_eq!(
+        code,
+        basecraft_protocol::operation::OperationErrorCode::OutputConflict,
+        "{refused}"
+    );
     assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
     let outcome = common::run_in(&registry, &mut session, |s| {
         tree_request(s, doc, &parameters, "forest.nwk")

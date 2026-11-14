@@ -6,15 +6,26 @@ use basecraft_docs::{
     sanger::{SangerDraft, SangerDraftExt},
 };
 use basecraft_io::abif;
-use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
-use basecraft_protocol::operation::{OperationOutcome, RuntimeState};
+use basecraft_ops::Error as OpsError;
+use basecraft_plugin_host::{Error, Result, jobs::JobManager, policy::SessionPolicy};
+use basecraft_protocol::operation::{OperationErrorCode as Code, OperationOutcome, RuntimeState};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// The project chosen for this window; its folder may have gone missing.
+fn chosen() -> basecraft_ops::Result<Option<basecraft_ops::project::Project>> {
+    crate::chosen_project::chosen().map_err(OpsError::NotReady)
+}
+
+/// What a review needs before this step can run; the reason is for people.
+fn not_ready(reason: &str) -> Error {
+    OpsError::NotReady(reason.into()).into()
+}
 
 /// Explicit request evidence uses the shared preserve-copy ledger. The returned
 /// verified path outlives source-controller snapshots, failed stages and retries.
 /// Capture occurs before dispatch: a worker must never race snapshot disposal.
-pub(super) fn retain_reference(anchor: &Path, source: &Path) -> Result<PathBuf, String> {
+pub(super) fn retain_reference(anchor: &Path, source: &Path) -> basecraft_ops::Result<PathBuf> {
     (|| -> basecraft_ops::Result<PathBuf> {
         // A retry already names shared retained evidence; verify and reuse it.
         if source
@@ -29,7 +40,7 @@ pub(super) fn retain_reference(anchor: &Path, source: &Path) -> Result<PathBuf, 
             }
         }
         let hash = basecraft_io::hash_file(source)?;
-        let project = crate::chosen_project::chosen().map_err(basecraft_ops::Error::Invalid)?;
+        let project = chosen()?;
         let run = basecraft_ops::records::reference_input_with_dependencies(
             anchor,
             source,
@@ -46,7 +57,6 @@ pub(super) fn retain_reference(anchor: &Path, source: &Path) -> Result<PathBuf, 
             .ok_or_else(|| std::io::Error::other("Missing reference evidence"))?;
         basecraft_ops::records::verified_source(run.directory(), reference)
     })()
-    .map_err(|e| e.to_string())
 }
 
 pub(super) enum Request {
@@ -110,9 +120,12 @@ impl Drop for Stage {
         self.work.cancel();
     }
 }
-fn check(cancelled: &AtomicBool) -> Result<(), String> {
+/// Why a cancelled stage ended; the review it would have replaced is kept.
+pub(super) const CANCELLED: &str = "Sanger operation cancelled; previous review preserved";
+
+fn check(cancelled: &AtomicBool) -> Result<()> {
     if cancelled.load(Ordering::Acquire) {
-        Err("Sanger operation cancelled; previous review preserved".into())
+        Err(OpsError::Cancelled(CANCELLED.into()).into())
     } else {
         Ok(())
     }
@@ -124,27 +137,25 @@ fn operation(
     inputs: serde_json::Value,
     parameters: serde_json::Value,
     cancelled: &AtomicBool,
-) -> Result<OperationOutcome, String> {
+) -> Result<OperationOutcome> {
     check(cancelled)?;
-    let registry = crate::plugins::registry().map_err(|e| e.to_string())?;
+    let registry = crate::plugins::registry()?;
     let mut request = serde_json::json!({"operation": operation});
     request["inputs"] = inputs;
     request["parameters"] = parameters;
-    let request = serde_json::from_value(request).map_err(|e| e.to_string())?;
-    let policy = SessionPolicy::new(root, true).map_err(|e| e.to_string())?;
-    let accepted = jobs
-        .submit(&registry, request, policy, "GUI")
-        .map_err(|e| e.to_string())?;
+    let request = serde_json::from_value(request)?;
+    let policy = SessionPolicy::new(root, true)?;
+    let accepted = jobs.submit(&registry, request, policy, "GUI")?;
     // The shared wait drives the run; a detached session owns no document.
     let mut session = basecraft_ops::Session::detached(root);
     let outcome = jobs
         .wait_in_session(&accepted.run_id, &mut session, &|| {
             cancelled.load(Ordering::Acquire)
-        })
-        .map_err(|e| e.to_string())?;
+        })?;
     check(cancelled)?;
     if outcome.state != RuntimeState::Completed {
-        return Err(format!(
+        let code = outcome.errors.first().map_or(Code::ToolFailure, |e| e.code);
+        return Err(Error::refused(code, format!(
             "{:?}: {}. Retained evidence: {}",
             outcome.state,
             outcome
@@ -154,32 +165,38 @@ fn operation(
                 .collect::<Vec<_>>()
                 .join("; "),
             outcome.evidence.as_deref().unwrap_or("unavailable")
-        ));
+        )));
     }
     Ok(outcome)
 }
-fn artifact(outcome: &OperationOutcome, name: &str) -> Result<PathBuf, String> {
+fn artifact(outcome: &OperationOutcome, name: &str) -> Result<PathBuf> {
     outcome
         .artifacts
         .iter()
         .find(|a| Path::new(&a.path).file_name().is_some_and(|n| n == name))
         .map(|a| PathBuf::from(&a.path))
-        .ok_or_else(|| format!("Operation did not retain {name}"))
+        .ok_or_else(|| {
+            Error::refused(
+                Code::PluginProtocolViolation,
+                format!("Operation did not retain {name}"),
+            )
+        })
 }
-fn directory(outcome: &OperationOutcome) -> Result<&Path, String> {
-    outcome
-        .evidence
-        .as_deref()
-        .map(Path::new)
-        .ok_or_else(|| "Operation receipt has no evidence directory".into())
+fn directory(outcome: &OperationOutcome) -> Result<&Path> {
+    outcome.evidence.as_deref().map(Path::new).ok_or_else(|| {
+        Error::refused(
+            Code::EvidenceIncomplete,
+            "Operation receipt has no evidence directory".into(),
+        )
+    })
 }
-fn edit_analysis(review: &mut SangerReview, edit: ReviewOp) -> Result<(), String> {
+fn edit_analysis(review: &mut SangerReview, edit: ReviewOp) -> basecraft_ops::Result<()> {
     let mut owner = ReviewDocument::new(review)?;
     owner.apply(edit)?;
-    *review = owner.review().ok_or("No review is open")?.clone();
+    *review = owner.session.sanger_review(owner.id)?.clone();
     Ok(())
 }
-fn evaluate(session: &mut SangerReview, view: &mut SangerReviewView) -> Result<(), String> {
+fn evaluate(session: &mut SangerReview, view: &mut SangerReviewView) -> basecraft_ops::Result<()> {
     view.review_settings = session.settings.clone();
     edit_analysis(
         session,
@@ -198,7 +215,7 @@ pub(super) fn start(
     owner: cxx_qt::CxxQtThread<super::qobject::SangerController>,
     request: Request,
     session: Option<SangerReview>,
-) -> Result<Stage, String> {
+) -> std::io::Result<Stage> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let name = request.name();
@@ -211,15 +228,14 @@ pub(super) fn start(
         listing,
         move |work| execute(request, session, work.flag()),
         move |this, result| this.stage_done(id, result),
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
     Ok(Stage { id, name, work })
 }
 fn execute(
     request: Request,
     previous: Option<SangerReview>,
     cancelled: &AtomicBool,
-) -> Result<Completion, String> {
+) -> Result<Completion> {
     check(cancelled)?;
     let mut jobs = JobManager::default();
     let mut payload = String::new();
@@ -227,14 +243,15 @@ fn execute(
         Request::Prepare(paths, threshold) => {
             let captures = paths
                 .iter()
-                .map(|path| {
-                    basecraft_ops::sanger_review::CapturedInput::open(path)
-                        .map_err(|e| e.to_string())
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                .map(|path| basecraft_ops::sanger_review::CapturedInput::open(path))
+                .collect::<basecraft_ops::Result<Vec<_>>>()?;
             jobs = jobs.with_captured_inputs(captures.clone());
-            let first = paths.first().ok_or("Choose two or three AB1 reads")?;
-            let root = first.parent().ok_or("AB1 has no parent directory")?;
+            let first = paths
+                .first()
+                .ok_or_else(|| OpsError::MissingChoice("Choose two or three AB1 reads".into()))?;
+            let root = first
+                .parent()
+                .ok_or_else(|| OpsError::NoFileName(first.clone()))?;
             let inputs: Vec<_> = paths
                 .iter()
                 .map(|path| serde_json::json!({"kind":"file","path":path}))
@@ -248,7 +265,8 @@ fn execute(
                 cancelled,
             )?;
             let path = artifact(&outcome, "evidence.json")?;
-            let mut session = SangerReview::from_draft(SangerDraft::read(&path)?, first)?;
+            let draft = basecraft_ops::sanger_review::read_evidence(&path, SangerDraft::validate)?;
+            let mut session = SangerReview::from_draft(draft, first)?;
             session.use_captured_inputs(captures)?;
             let mut view = session_view(&session)?;
             evaluate(&mut session, &mut view)?;
@@ -256,14 +274,19 @@ fn execute(
             (session, path)
         }
         request => {
-            let mut session = previous.ok_or("Open a Sanger review first")?;
+            let mut session = previous.ok_or_else(|| not_ready("Open a Sanger review first"))?;
             let path = session.storage_anchor().to_path_buf();
-            let root = path.parent().ok_or("Review has no parent directory")?;
+            let root = path
+                .parent()
+                .ok_or_else(|| OpsError::NoFileName(path.clone()))?;
             match request {
                 Request::Single(threshold) => {
                     let draft = session.working_draft()?;
                     if draft.inputs.len() != 1 {
-                        return Err("Choose one trace to compute calls".into());
+                        return Err(OpsError::MissingChoice(
+                            "Choose one trace to compute calls".into(),
+                        )
+                        .into());
                     }
                     let source = &draft.inputs[0];
                     let mut caller = basecraft_plugin_host::sanger_calls::SangerCaller::default();
@@ -291,14 +314,11 @@ fn execute(
                         serde_json::json!({"rows":[["probe",draft.consensus.replace('-',"")]],"orientation":true,"keep":true}),
                         cancelled,
                     )?;
-                    let value: serde_json::Value = serde_json::from_slice(
-                        &std::fs::read(artifact(&outcome, "addition.json")?)
-                            .map_err(|e| e.to_string())?,
-                    )
-                    .map_err(|e| e.to_string())?;
+                    let value: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(artifact(&outcome, "addition.json")?)?)?;
                     if value["reversed"].as_array().is_some_and(|a| !a.is_empty()) {
                         if !session.automatic_only() {
-                            return Err("This review already has decisions; open a fresh draft to change orientation".into());
+                            return Err(not_ready("This review already has decisions; open a fresh draft to change orientation"));
                         }
                         let mut draft = session.working_draft()?.reverse_complemented();
                         draft.limitations.push(format!("Draft reverse-complemented for alignment context; source draft SHA-256 {}",session.draft_sha256));
@@ -329,7 +349,7 @@ fn execute(
                     session.attach_operation_placement(
                         directory(&outcome)?,
                         &artifact(&outcome, "placement.json")?,
-                        crate::chosen_project::chosen()?.as_ref(),
+                        chosen()?.as_ref(),
                     )?;
                     let mut view = session_view(&session)?;
                     let automatic = session.automatic_only();
@@ -358,11 +378,12 @@ fn execute(
                         parameters,
                         cancelled,
                     )?;
-                    payload = std::fs::read_to_string(artifact(&outcome, "primers.json")?)
-                        .map_err(|e| e.to_string())?;
+                    payload = std::fs::read_to_string(artifact(&outcome, "primers.json")?)?;
                     session.attach_operation_run(directory(&outcome)?)?;
                 }
-                Request::Prepare(..) => return Err("Unexpected nested preparation request".into()),
+                Request::Prepare(..) => {
+                    return Err(OpsError::Invalid("Unexpected nested preparation request".into()).into());
+                }
             }
             (session, path)
         }
@@ -380,77 +401,50 @@ fn execute(
 
 /// The editor owns a regular Session and its checked document handle.
 /// This adapter holds no history, checkpoint or save implementation.
-/// Why a review could not start. A folder that cannot hold recovery stays
-/// typed, so the window can offer a copy (D13).
-#[derive(Debug)]
-pub(super) enum ReviewFailure {
-    ReadOnlyFolder,
-    Failed(String),
-}
-impl ReviewFailure {
-    pub fn read_only(&self) -> bool {
-        matches!(self, Self::ReadOnlyFolder)
-    }
-}
-impl From<ReviewFailure> for String {
-    fn from(failure: ReviewFailure) -> Self {
-        match failure {
-            ReviewFailure::ReadOnlyFolder => crate::document_open::READ_ONLY_EDIT.into(),
-            ReviewFailure::Failed(message) => message,
-        }
-    }
-}
-
 pub(super) struct ReviewDocument {
     pub session: basecraft_ops::Session,
     pub id: basecraft_ops::DocId,
 }
+
+/// A recoverable session for `file`; the chosen project's folder may be missing.
+fn session_for(file: &Path) -> basecraft_ops::Result<basecraft_ops::Session> {
+    crate::chosen_project::session_for(file).map_err(OpsError::NotReady)
+}
+
 impl ReviewDocument {
-    pub fn new(review: &SangerReview) -> Result<Self, ReviewFailure> {
-        let mut session = crate::chosen_project::session_for(review.storage_anchor())
-            .map_err(ReviewFailure::Failed)?;
-        let id = session.create_sanger_review(review).map_err(|e| match e {
-            basecraft_ops::Error::ReadOnlyFolder { .. } => ReviewFailure::ReadOnlyFolder,
-            e => ReviewFailure::Failed(e.to_string()),
-        })?;
+    /// A folder that cannot hold recovery stays typed (`ReadOnlyFolder`), so
+    /// the window can offer a copy (D13).
+    pub fn new(review: &SangerReview) -> basecraft_ops::Result<Self> {
+        let mut session = session_for(review.storage_anchor())?;
+        let id = session.create_sanger_review(review)?;
         Ok(Self { session, id })
     }
-    pub fn open(path: &Path) -> Result<Self, String> {
-        let mut session = crate::chosen_project::session_for(path)?;
-        let id = session.open(path).map_err(|e| e.to_string())?;
-        session.sanger_review(id).map_err(|e| e.to_string())?;
+    pub fn open(path: &Path) -> basecraft_ops::Result<Self> {
+        let mut session = session_for(path)?;
+        let id = session.open(path)?;
+        session.sanger_review(id)?;
         Ok(Self { session, id })
     }
-    pub fn report(&self, _dirty: bool) -> Result<basecraft_ops::records::Report, String> {
-        self.review()
-            .ok_or("No review is open")?
-            .report_with_history(
-                &self
-                    .session
-                    .document_record(self.id)
-                    .map_err(|e| e.to_string())?,
-            )
+    pub fn report(&self, _dirty: bool) -> basecraft_ops::Result<basecraft_ops::records::Report> {
+        self.session
+            .sanger_review(self.id)?
+            .report_with_history(&self.session.document_record(self.id)?)
     }
     pub fn review(&self) -> Option<&SangerReview> {
         self.session.sanger_review(self.id).ok()
     }
     /// A review decision, as the CLI's `sanger decide` and MCP make it.
-    pub fn apply(&mut self, edit: ReviewOp) -> Result<(), String> {
+    pub fn apply(&mut self, edit: ReviewOp) -> basecraft_ops::Result<()> {
         basecraft_ops::sanger_commands::decide(&mut self.session, self.id, edit)
-            .map_err(|e| crate::document_open::edit_failure(&e))
     }
 
-    pub fn save(&mut self, path: &Path) -> Result<(), String> {
-        self.session
-            .save_new(self.id, Some(path))
-            .map_err(|e| e.to_string())
+    pub fn save(&mut self, path: &Path) -> basecraft_ops::Result<()> {
+        self.session.save_new(self.id, Some(path))
     }
-    pub fn update(&mut self, review: &SangerReview) -> Result<(), String> {
-        self.session
-            .update_sanger_review(self.id, review)
-            .map_err(|e| e.to_string())
+    pub fn update(&mut self, review: &SangerReview) -> basecraft_ops::Result<()> {
+        self.session.update_sanger_review(self.id, review)
     }
-    pub fn select_call_set(&mut self, id: &str) -> Result<(), String> {
+    pub fn select_call_set(&mut self, id: &str) -> basecraft_ops::Result<()> {
         self.session
             .apply(
                 self.id,
@@ -459,21 +453,21 @@ impl ReviewDocument {
                 },
             )
             .map(|_| ())
-            .map_err(|e| crate::document_open::edit_failure(&e))
     }
-    pub fn export_consensus(&mut self, path: &Path, label: &str) -> Result<(), String> {
+    pub fn export_consensus(&mut self, path: &Path, label: &str) -> basecraft_ops::Result<()> {
+        self.session.export_sanger_consensus(self.id, path, label)
+    }
+    pub fn addition_evidence(&mut self) -> basecraft_ops::Result<String> {
+        let project = chosen()?;
         self.session
-            .export_sanger_consensus(self.id, path, label)
-            .map_err(|e| e.to_string())
-    }
-    pub fn addition_evidence(&mut self) -> Result<String, String> {
-        self.review()
-            .ok_or("No review is open")?
-            .addition_evidence(crate::chosen_project::chosen()?.as_ref())
+            .sanger_review(self.id)?
+            .addition_evidence(project.as_ref())
     }
 }
 
-pub(super) fn load_draft_review(path: &Path) -> Result<(SangerReviewView, SangerReview), String> {
+pub(super) fn load_draft_review(
+    path: &Path,
+) -> basecraft_ops::Result<(SangerReviewView, SangerReview)> {
     let mut session = SangerReview::new(path)?;
     // Opening evidence is inspection. Re-running Tracy to enrich older
     // evidence must be an explicit analysis, never a passive-open write.
@@ -513,22 +507,20 @@ pub(super) fn sync_review_view(review: &mut SangerReviewView, session: &SangerRe
     }
 }
 
-pub(super) fn session_view(session: &SangerReview) -> Result<SangerReviewView, String> {
+pub(super) fn session_view(session: &SangerReview) -> basecraft_ops::Result<SangerReviewView> {
     let draft = session.working_draft()?;
     let traces = session
         .captured_inputs()?
         .iter()
-        .map(|capture| abif::parse(capture.bytes()).map_err(|e| e.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut view = SangerReviewView::new(draft, traces)?;
+        .map(|capture| abif::parse(capture.bytes()))
+        .collect::<basecraft_io::Result<Vec<_>>>()?;
+    let mut view = SangerReviewView::new(draft, traces).map_err(OpsError::Invalid)?;
     if let Some(placement) = session.placement()? {
-        let indexed = Arc::new(
-            basecraft_io::fasta::IndexedFasta::open(&placement.source_path)
-                .map_err(|e| e.to_string())?,
-        );
-        let alignment =
-            AlignmentDoc::from_fasta(placement.source_path.display().to_string(), &indexed);
-        view.attach_alignment(placement, alignment)?;
+        let source = placement.source_path.clone();
+        let indexed = Arc::new(basecraft_io::fasta::IndexedFasta::open(&source)?);
+        let alignment = AlignmentDoc::from_fasta(source.display().to_string(), &indexed);
+        view.attach_alignment(placement, alignment)
+            .map_err(|detail| OpsError::Damaged { path: source, detail })?;
     }
     Ok(view)
 }
@@ -549,7 +541,7 @@ mod tests {
             None,
             &flag,
         );
-        assert!(result.err().unwrap().contains("cancelled"));
+        assert_eq!(result.err().unwrap().to_string(), CANCELLED);
     }
 
     #[test]

@@ -12,8 +12,7 @@ use crate::{DocId, Error, Result, Session};
 
 /// A new review of `read` from its instrument calls, in `session`.
 pub fn review_read(session: &mut Session, read: &Path) -> Result<DocId> {
-    let review =
-        crate::sanger_review::instrument_review(read).map_err(InputError::UnreadableRead)?;
+    let review = crate::sanger_review::instrument_review(read)?;
     session.create_sanger_review(&review)
 }
 
@@ -41,9 +40,6 @@ pub enum InputError {
     NotAColumn(String),
     #[error("{0}: the range runs backwards")]
     Backwards(String),
-    /// The read's instrument calls could not be read; the reason as given.
-    #[error("{0}")]
-    UnreadableRead(String),
 }
 
 /// A decision as a person states it: `accept`, `reject`, `pending`, or the
@@ -133,9 +129,7 @@ pub fn add_consensus(
     label: &str,
 ) -> Result<()> {
     let reviewed = session.sanger_review(review)?;
-    let evidence = reviewed
-        .addition_evidence(session.project())
-        .map_err(AdditionError::Evidence)?;
+    let evidence = reviewed.addition_evidence(session.project())?;
     let sequence = reviewed.resolved_sequence().unwrap_or_default();
     let rows = consensus_rows(session, alignment, &evidence, &sequence, label)?;
     let sequence = rows[0].1.clone();

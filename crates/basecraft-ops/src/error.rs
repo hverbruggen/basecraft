@@ -72,6 +72,9 @@ pub enum Error {
     /// What the request was prepared from has changed; prepare it again.
     #[error("{0}")]
     Outdated(String),
+    /// The person cancelled the work; what it would have replaced is kept.
+    #[error("{0}")]
+    Cancelled(String),
     /// The submission package was written, but the document recording the
     /// export could not be saved.
     #[error(
@@ -170,6 +173,7 @@ impl Error {
             Self::MissingChoice(_) => Code::MissingChoice,
             Self::OutputConflict(_) => Code::OutputConflict,
             Self::NotReady(_) => Code::NotReady,
+            Self::Cancelled(_) => Code::Cancelled,
             Self::PackageNotRecorded(_) => Code::PublicationIncomplete,
             Self::Limit { .. } => Code::Limit,
             Self::Unsupported(_) => Code::Unsupported,

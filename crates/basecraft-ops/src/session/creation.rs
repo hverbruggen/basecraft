@@ -190,9 +190,7 @@ impl Session {
     ) -> Result<()> {
         let review = self.sanger_review(id)?;
         let call_set = review.draft_sha256.clone();
-        let sha256 = review
-            .write_consensus(path, label)
-            .map_err(super::Error::Invalid)?;
+        let sha256 = review.write_consensus(path, label)?;
         self.apply(
             id,
             Op::SangerReview {

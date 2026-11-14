@@ -3,6 +3,7 @@
 //! retained receipts. The plugin names and hashes its own program through its
 //! `engine` query; the host knows only the contract and the Sanger draft.
 use crate::{
+    Error, Result,
     jobs::JobManager,
     policy::SessionPolicy,
     registry::{Registry, RegistryConfig},
@@ -14,8 +15,13 @@ use crate::{
 use basecraft_docs::sanger::SangerDraft;
 use basecraft_docs::sanger::SangerDraftExt;
 use basecraft_protocol::operation::{
-    InputReference, InvocationInputEvidence, OperationRequest, RuntimeState,
+    InputReference, InvocationInputEvidence, OperationErrorCode as Code, OperationRequest,
+    RuntimeState,
 };
+
+fn refused(code: Code, message: impl Into<String>) -> Error {
+    Error::refused(code, message.into())
+}
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -45,22 +51,25 @@ pub struct CalledDraft {
 fn engine(
     operation: &crate::registry::RegisteredOperation,
     interpreter: &Path,
-) -> Result<(String, String), String> {
-    let mut process = crate::PluginProcess::spawn_with(&operation.package.manifest, interpreter)
-        .map_err(|e| e.to_string())?;
-    let answer = process.query("engine").map_err(|e| e.to_string());
+) -> Result<(String, String)> {
+    let mut process = crate::PluginProcess::spawn_with(&operation.package.manifest, interpreter)?;
+    let answer = process.query("engine");
     let _ = process.finish();
     let answer = answer?;
     if let Some(problem) = answer["problem"].as_str() {
-        return Err(problem.into());
+        return Err(refused(Code::PluginUnavailable, problem));
     }
     match (answer["name"].as_str(), answer["sha256"].as_str()) {
         (Some(name), Some(sha256)) => Ok((name.into(), sha256.into())),
-        _ => Err("Caller reported no engine".into()),
+        _ => Err(refused(
+            Code::PluginProtocolViolation,
+            "Caller reported no engine",
+        )),
     }
 }
 
-fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<CalledDraft, String> {
+fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<CalledDraft> {
+    let violation = |message: &str| refused(Code::PluginProtocolViolation, message);
     let outcome = &verified.outcome;
     let artifact = outcome
         .artifacts
@@ -70,9 +79,10 @@ fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<Cal
                 .file_name()
                 .is_some_and(|name| name == identity.primary.as_str())
         })
-        .ok_or("Caller did not retain draft evidence")?;
+        .ok_or_else(|| violation("Caller did not retain draft evidence"))?;
     let path = PathBuf::from(&artifact.path);
-    let mut draft = SangerDraft::read(&path)?;
+    let mut draft: SangerDraft =
+        basecraft_ops::sanger_review::read_evidence(&path, SangerDraft::validate)?;
     let effective = &identity.query.effective_parameters;
     if draft.inputs.len() != 1
         || !draft.engine.eq_ignore_ascii_case(&identity.engine)
@@ -83,22 +93,20 @@ fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<Cal
         || Some(draft.minimum_identity.to_bits())
             != effective["minimum_identity"].as_f64().map(f64::to_bits)
     {
-        return Err(
+        return Err(basecraft_ops::Error::Outdated(
             "Source or executed caller identity changed; instrument review preserved".into(),
-        );
+        )
+        .into());
     }
-    identity
-        .capture
-        .check_current()
-        .map_err(|e| e.to_string())?;
-    let trace = basecraft_io::abif::parse(identity.capture.bytes()).map_err(|e| e.to_string())?;
+    identity.capture.check_current()?;
+    let trace = basecraft_io::abif::parse(identity.capture.bytes())?;
     if draft.inputs[0].calls.as_ref().is_none_or(|calls| {
         calls
             .positions
             .last()
             .is_none_or(|position| *position as usize >= trace.samples())
     }) {
-        return Err("Caller coordinates do not fit the original trace".into());
+        return Err(violation("Caller coordinates do not fit the original trace"));
     }
     let run = verified.directory;
     draft.inputs[0].path.clone_from(&identity.source);
@@ -108,7 +116,7 @@ fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<Cal
         identity.query.pins.descriptor_digest,
         identity.query.effective_parameters
     ));
-    draft.validate()?;
+    draft.validate().map_err(|e| violation(&e))?;
     Ok(CalledDraft { draft, run })
 }
 
@@ -119,11 +127,13 @@ impl SangerCaller {
         source: &Path,
         sha256: &str,
         signal_threshold: u32,
-    ) -> Result<Option<CalledDraft>, String> {
-        let capture =
-            basecraft_ops::sanger_review::CapturedInput::open(source).map_err(|e| e.to_string())?;
+    ) -> Result<Option<CalledDraft>> {
+        let capture = basecraft_ops::sanger_review::CapturedInput::open(source)?;
         if capture.sha256() != sha256 {
-            return Err("AB1 changed since opening; reopen it before calling".into());
+            return Err(basecraft_ops::Error::ChangedOnDisk {
+                path: source.into(),
+            }
+            .into());
         }
         self.start_captured(capture, signal_threshold)
     }
@@ -132,16 +142,18 @@ impl SangerCaller {
         &mut self,
         capture: basecraft_ops::sanger_review::CapturedInput,
         signal_threshold: u32,
-    ) -> Result<Option<CalledDraft>, String> {
+    ) -> Result<Option<CalledDraft>> {
         if !(1..=90).contains(&signal_threshold) {
-            return Err("Signal cutoff must be between 1 and 90".into());
+            return Err(refused(
+                Code::InvalidArguments,
+                "Signal cutoff must be between 1 and 90",
+            ));
         }
         self.cancel()?;
-        capture.check_current().map_err(|e| e.to_string())?;
+        capture.check_current()?;
         let source = capture.path().to_path_buf();
         let sha256 = capture.sha256().to_owned();
-        let registry = Registry::load(&RegistryConfig::discover().map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+        let registry = Registry::load(&RegistryConfig::discover()?)?;
         let mut callers = registry.operations.values().filter(|operation| {
             operation.descriptor.host.as_ref().is_some_and(|host| {
                 host.caller == Some(basecraft_protocol::operation::CallerKind::SingleTrace)
@@ -149,38 +161,51 @@ impl SangerCaller {
         });
         let operation = callers
             .next()
-            .ok_or("Install a single-trace caller plugin to compute alternative calls")?;
+            .ok_or_else(|| {
+                refused(
+                    Code::PluginUnavailable,
+                    "Install a single-trace caller plugin to compute alternative calls",
+                )
+            })?;
         if callers.next().is_some() {
-            return Err("More than one single-trace caller is installed".into());
+            return Err(refused(
+                Code::PluginUnavailable,
+                "More than one single-trace caller is installed",
+            ));
         }
         let name = &operation.package.manifest.name;
         if !operation.package.enabled {
-            return Err(format!("{name} is disabled"));
+            return Err(refused(Code::PluginDisabled, format!("{name} is disabled")));
         }
-        let interpreter = operation
-            .package
-            .interpreter
-            .as_ref()
-            .ok_or_else(|| format!("{name} Python runtime is unavailable"))?;
+        let interpreter = operation.package.interpreter.as_ref().ok_or_else(|| {
+            refused(
+                Code::PluginUnavailable,
+                format!("{name} Python runtime is unavailable"),
+            )
+        })?;
         let (program, engine_sha256) = engine(operation, interpreter)?;
         let parameters = crate::contract::normalize_parameters(
             &operation.descriptor,
             &json!({"engine_sha256": engine_sha256, "signal_threshold": signal_threshold}),
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
         let binding = operation
             .descriptor
             .inputs
             .keys()
             .next()
-            .ok_or("Caller declares no input")?
+            .ok_or_else(|| refused(Code::IncompatibleContract, "Caller declares no input"))?
             .clone();
         let primary = operation
             .descriptor
             .outputs
             .values()
             .find_map(|output| output.primary.clone())
-            .ok_or("Caller declares no primary output")?;
+            .ok_or_else(|| {
+                refused(
+                    Code::IncompatibleContract,
+                    "Caller declares no primary output",
+                )
+            })?;
         let hash = capture.hash().to_owned();
         let identity = Identity {
             engine: program,
@@ -204,13 +229,15 @@ impl SangerCaller {
                 )]),
             },
         };
-        let root = source.parent().ok_or("AB1 has no parent folder")?;
+        let root = source
+            .parent()
+            .ok_or_else(|| refused(Code::InvalidArguments, "AB1 has no parent folder"))?;
         let lookup = lookup_completed_result(&root.join("operation"), &identity.query);
         self.lookup_diagnostics = lookup.diagnostics;
         if let Some(result) = lookup.result {
             match checked(result, &identity) {
                 Ok(calls) => return Ok(Some(calls)),
-                Err(error) => self.lookup_diagnostics.push(error),
+                Err(error) => self.lookup_diagnostics.push(error.to_string()),
             }
         }
         let request = OperationRequest {
@@ -218,7 +245,12 @@ impl SangerCaller {
             inputs: std::collections::BTreeMap::from([(
                 "reads".into(),
                 vec![InputReference::File {
-                    path: source.to_str().ok_or("AB1 path is not UTF-8")?.into(),
+                    path: source
+                        .to_str()
+                        .ok_or_else(|| {
+                            basecraft_ops::Error::Unsupported("AB1 path is not UTF-8".into())
+                        })?
+                        .into(),
                 }],
             )]),
             parameters,
@@ -233,17 +265,16 @@ impl SangerCaller {
             .submit(
                 &registry,
                 request,
-                SessionPolicy::new(root, true).map_err(|e| e.to_string())?,
+                SessionPolicy::new(root, true)?,
                 "Automatic single-trace alternative calls",
-            )
-            .map_err(|e| e.to_string())?;
+            )?;
         self.active = Some((accepted.run_id, identity));
         Ok(None)
     }
 
-    pub fn cancel(&mut self) -> Result<(), String> {
+    pub fn cancel(&mut self) -> Result<()> {
         if let Some((id, _)) = self.active.take() {
-            self.jobs.cancel(&id).map_err(|e| e.to_string())?;
+            self.jobs.cancel(&id)?;
         }
         Ok(())
     }
@@ -252,22 +283,21 @@ impl SangerCaller {
     pub fn wait(
         &mut self,
         cancelled: &std::sync::atomic::AtomicBool,
-    ) -> Result<CalledDraft, String> {
-        let (id, identity) = self.active.take().ok_or("No call was started")?;
-        let outcome = self
-            .jobs
-            .wait(&id, None, &|| {
-                cancelled.load(std::sync::atomic::Ordering::Acquire)
-            })
-            .map_err(|e| e.to_string())?;
+    ) -> Result<CalledDraft> {
+        let (id, identity) = self
+            .active
+            .take()
+            .ok_or_else(|| refused(Code::InvalidArguments, "No call was started"))?;
+        let outcome = self.jobs.wait(&id, None, &|| {
+            cancelled.load(std::sync::atomic::Ordering::Acquire)
+        })?;
         if outcome.state != RuntimeState::Completed {
             return Err(outcome.errors.first().map_or_else(
-                || "Alternative calling cancelled".into(),
-                |error| error.message.clone(),
+                || refused(Code::Cancelled, "Alternative calling cancelled"),
+                |error| refused(error.code, error.message.clone()),
             ));
         }
-        let verified =
-            verify_completed_result(&outcome, &identity.query).map_err(|e| e.to_string())?;
+        let verified = verify_completed_result(&outcome, &identity.query)?;
         checked(verified, &identity)
     }
 }

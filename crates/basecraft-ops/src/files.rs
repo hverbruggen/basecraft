@@ -79,12 +79,7 @@ pub enum Kind {
 pub fn kind(path: &Path) -> Result<Kind> {
     match Format::from_path(path)? {
         Format::SangerReview => {
-            crate::sanger_review::SangerReview::load(path).map_err(|detail| {
-                crate::Error::Damaged {
-                    path: path.into(),
-                    detail,
-                }
-            })?;
+            crate::sanger_review::SangerReview::load(path)?;
             return Ok(Kind::SangerReview);
         }
         Format::Delimitation => return Ok(Kind::Delimitation),
@@ -222,11 +217,7 @@ pub fn load_in(project: Option<&crate::project::Project>, path: &Path) -> Result
     let format = Format::from_path(path)?;
     match format {
         Format::SangerReview => crate::sanger_review::SangerReview::load(path)
-            .map(|review| Loaded::SangerReview(Box::new(review)))
-            .map_err(|detail| crate::Error::Damaged {
-                path: path.into(),
-                detail,
-            }),
+            .map(|review| Loaded::SangerReview(Box::new(review))),
         Format::GenBank => Ok(Loaded::Sequence(opened_genbank(
             genbank::open_hashed(path)?.0,
         ))),
@@ -358,12 +349,7 @@ pub(crate) fn capture_load(
                     limit: 64 * 1024 * 1024,
                 });
             }
-            let review = crate::sanger_review::SangerReview::decode(main.bytes(), path).map_err(
-                |detail| Error::Damaged {
-                    path: path.into(),
-                    detail,
-                },
-            )?;
+            let review = crate::sanger_review::SangerReview::decode(main.bytes(), path)?;
             Loaded::SangerReview(Box::new(review))
         }
         Format::Tree => Loaded::Tree(load_tree_bytes(

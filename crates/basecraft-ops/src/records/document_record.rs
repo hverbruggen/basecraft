@@ -151,13 +151,7 @@ impl DocumentRecord {
             return Self::from_file(path, project)?.report();
         }
         if let Some(review) = crate::sanger_review::saved_review(path) {
-            let review = review.map_err(|detail| crate::Error::Damaged {
-                path: path.into(),
-                detail,
-            })?;
-            return review
-                .report_with_history(&Self::from_file(path, project)?)
-                .map_err(crate::error::invalid);
+            return review?.report_with_history(&Self::from_file(path, project)?);
         }
         Self::from_file(path, project)?.report()
     }

@@ -14,6 +14,38 @@ use std::path::{Path, PathBuf};
 
 use basecraft_docs::sanger::{ReviewReference, ReviewSettings, SangerDraft};
 
+use crate::error::damaged;
+use crate::{Error, Result};
+
+/// The largest Sanger draft or placement basecraft reads.
+const EVIDENCE_LIMIT: u64 = 32 * 1024 * 1024;
+/// The largest saved Sanger review basecraft reads.
+const REVIEW_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// Read Sanger evidence JSON (a draft or a placement) and check it.
+pub fn read_evidence<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    check: impl Fn(&T) -> std::result::Result<(), String>,
+) -> Result<T> {
+    parse_evidence(path, &std::fs::read(path)?, check)
+}
+
+fn parse_evidence<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    bytes: &[u8],
+    check: impl Fn(&T) -> std::result::Result<(), String>,
+) -> Result<T> {
+    if bytes.len() as u64 > EVIDENCE_LIMIT {
+        return Err(Error::Limit {
+            what: "Sanger evidence bytes".into(),
+            limit: EVIDENCE_LIMIT,
+        });
+    }
+    let value: T = serde_json::from_slice(bytes).map_err(|e| damaged(path, e.to_string()))?;
+    check(&value).map_err(|e| damaged(path, e))?;
+    Ok(value)
+}
+
 /// Recognised saved Sanger evidence, determined from validated content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EvidenceKind {
@@ -49,7 +81,7 @@ pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
 }
 
 /// Read a validated saved review recognised by content. Other files return None.
-pub fn saved_review(path: &Path) -> Option<Result<SangerReview, String>> {
+pub fn saved_review(path: &Path) -> Option<Result<SangerReview>> {
     (evidence_kind(path) == Some(EvidenceKind::Review)).then(|| SangerReview::load(path))
 }
 
@@ -97,7 +129,7 @@ impl SangerReview {
     pub fn report_with_history(
         &self,
         record: &crate::records::document_record::DocumentRecord,
-    ) -> Result<crate::records::document_record::Report, String> {
+    ) -> Result<crate::records::document_record::Report> {
         let mut report = self.document_report(record.unsaved)?;
         let mut represented = std::collections::HashSet::new();
         let mut duplicate_rows = std::collections::HashSet::new();
@@ -118,7 +150,7 @@ impl SangerReview {
             .filter(|entry| matches!(entry.op, basecraft_protocol::Op::Open { .. }))
             .map(|entry| entry.id.as_str())
             .collect();
-        let shared = record.report().map_err(|e| e.to_string())?;
+        let shared = record.report()?;
         report.warnings.extend(shared.warnings);
         report.history.extend(
             shared
@@ -138,7 +170,7 @@ impl SangerReview {
     pub fn document_report(
         &self,
         unsaved: bool,
-    ) -> Result<crate::records::document_record::Report, String> {
+    ) -> Result<crate::records::document_record::Report> {
         use crate::records::document_record::{DocumentRecord, HistoryRow, MethodsParagraph};
         let mut state = serde_json::json!({
             "draft": self.draft, "draft_sha256": self.draft_sha256, "events": self.events,
@@ -159,11 +191,11 @@ impl SangerReview {
         if !retained.is_empty() {
             state["call_sets"] = serde_json::Value::Array(retained.clone());
         }
-        let raw = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
+        let raw = serde_json::to_string_pretty(&state)?;
         let mut record = DocumentRecord::empty(&self.draft_path.display().to_string());
         record.revision = basecraft_io::hash_bytes(raw.as_bytes());
         record.unsaved = unsaved;
-        let mut report = record.report().map_err(|e| e.to_string())?;
+        let mut report = record.report()?;
         report.raw = raw;
         for (index, event) in self.events.iter().enumerate() {
             let summary = describe(event);
@@ -173,7 +205,7 @@ impl SangerReview {
                 summary,
                 status: "Review audit".into(),
                 contributing: false,
-                details: serde_json::to_string_pretty(event).map_err(|e| e.to_string())?,
+                details: serde_json::to_string_pretty(event)?,
             });
         }
         for (set, details) in self.retained.iter().zip(&retained) {
@@ -189,7 +221,7 @@ impl SangerReview {
                 ),
                 status: "Retained call set".into(),
                 contributing: false,
-                details: serde_json::to_string_pretty(details).map_err(|e| e.to_string())?,
+                details: serde_json::to_string_pretty(details)?,
             });
         }
         let manual = self.manual.iter().filter(|m| **m).count();
@@ -237,13 +269,10 @@ impl SangerReview {
         column < self.mask.start || column >= self.mask.end
     }
 
-    pub fn new(draft_path: &Path) -> Result<Self, String> {
-        let draft_json = std::fs::read_to_string(draft_path).map_err(|e| e.to_string())?;
-        if draft_json.len() > 32 * 1024 * 1024 {
-            return Err("Sanger evidence exceeds 32 MiB".into());
-        }
-        let draft: SangerDraft = serde_json::from_str(&draft_json).map_err(|e| e.to_string())?;
-        draft.validate()?;
+    pub fn new(draft_path: &Path) -> Result<Self> {
+        let draft_json = std::fs::read_to_string(draft_path)?;
+        let draft: SangerDraft =
+            parse_evidence(draft_path, draft_json.as_bytes(), SangerDraft::validate)?;
         let mut session = Self::from_draft(draft, draft_path)?;
         session.draft_sha256 = basecraft_io::sha256_bytes(draft_json.as_bytes());
         session.draft_json = draft_json;
@@ -251,9 +280,9 @@ impl SangerReview {
     }
 
     /// Start an unsaved review without creating files or invoking a caller.
-    pub fn from_draft(draft: SangerDraft, draft_path: &Path) -> Result<Self, String> {
-        draft.validate()?;
-        let draft_json = serde_json::to_string(&draft).map_err(|e| e.to_string())?;
+    pub fn from_draft(draft: SangerDraft, draft_path: &Path) -> Result<Self> {
+        draft.validate().map_err(Error::Invalid)?;
+        let draft_json = serde_json::to_string(&draft)?;
         let hash = basecraft_io::sha256_bytes(draft_json.as_bytes());
         let decisions = vec![ReviewChoice::Pending; draft.columns.len()];
         Ok(Self {
@@ -269,48 +298,58 @@ impl SangerReview {
             decisions,
             events: Vec::new(),
             evidence: storage::ReviewEvidence::default(),
-            anchor: std::path::absolute(draft_path).map_err(|e| e.to_string())?,
+            anchor: std::path::absolute(draft_path)?,
             captures: std::sync::Arc::default(),
         })
     }
 
-    pub fn load(path: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        if bytes.len() > 64 * 1024 * 1024 {
-            return Err("Sanger review exceeds 64 MiB".into());
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = std::fs::read(path)?;
+        if bytes.len() as u64 > REVIEW_LIMIT {
+            return Err(Error::Limit {
+                what: "Sanger review bytes".into(),
+                limit: REVIEW_LIMIT,
+            });
         }
         Self::decode(&bytes, path)
     }
 
-    pub(crate) fn decode(bytes: &[u8], path: &Path) -> Result<Self, String> {
+    pub(crate) fn decode(bytes: &[u8], path: &Path) -> Result<Self> {
         let (value, writer) =
             basecraft_protocol::records::decode_written::<serde_json::Value>(bytes)
-                .map_err(|e| e.to_string())?;
-        Self::decode_value(value, path)
-            .map_err(|e| basecraft_protocol::records::unreadable(&writer, &e).to_string())
+                .map_err(|e| damaged(path, e.to_string()))?;
+        Self::decode_value(value, path).map_err(|e| match e {
+            Error::Damaged { path, detail } => damaged(
+                path,
+                basecraft_protocol::records::unreadable(&writer, &detail).to_string(),
+            ),
+            other => other,
+        })
     }
 
-    fn decode_value(value: serde_json::Value, path: &Path) -> Result<Self, String> {
-        let stored: StoredCallSets = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    fn decode_value(value: serde_json::Value, path: &Path) -> Result<Self> {
+        let damaged = |detail: &str| damaged(path, detail);
+        let stored: StoredCallSets =
+            serde_json::from_value(value).map_err(|e| damaged(&e.to_string()))?;
         if stored.version != 3 {
-            return Err("Unsupported Sanger review version".into());
+            return Err(Error::Unsupported("Unsupported Sanger review version".into()));
         }
         if stored.sets.is_empty() || stored.sets.len() > 32 {
-            return Err("Invalid number of Sanger call sets".into());
+            return Err(damaged("Invalid number of Sanger call sets"));
         }
         let mut sets = Vec::new();
         let mut ids = std::collections::BTreeSet::new();
         for set in stored.sets {
             let review = Self::from_stored(set, path)?;
             if !ids.insert(review.draft_sha256.clone()) {
-                return Err("Duplicate Sanger call set".into());
+                return Err(damaged("Duplicate Sanger call set"));
             }
             sets.push(review);
         }
         let selected = sets
             .iter()
             .position(|set| set.draft_sha256 == stored.selected)
-            .ok_or("Selected Sanger call set is missing")?;
+            .ok_or_else(|| damaged("Selected Sanger call set is missing"))?;
         let mut review = sets.remove(selected);
         if !sets.is_empty()
             && (review.draft.inputs.len() != 1
@@ -319,33 +358,33 @@ impl SangerReview {
                         || set.draft.inputs[0].sha256 != review.draft.inputs[0].sha256
                 }))
         {
-            return Err("Retained call sets refer to different Sanger sources".into());
+            return Err(damaged(
+                "Retained call sets refer to different Sanger sources",
+            ));
         }
         review.retained = sets;
         Ok(review)
     }
 
-    fn from_stored(stored: StoredReview, path: &Path) -> Result<Self, String> {
+    fn from_stored(stored: StoredReview, path: &Path) -> Result<Self> {
+        let damaged = |detail: &str| damaged(path, detail);
         if basecraft_io::sha256_bytes(stored.draft_json.as_bytes()) != stored.draft_sha256 {
-            return Err("Embedded source draft changed since review".into());
+            return Err(damaged("Embedded source draft changed since review"));
         }
         let draft: SangerDraft =
-            serde_json::from_str(&stored.draft_json).map_err(|e| e.to_string())?;
-        draft.validate()?;
+            serde_json::from_str(&stored.draft_json).map_err(|e| damaged(&e.to_string()))?;
+        draft.validate().map_err(|e| damaged(&e))?;
         let decisions = vec![ReviewChoice::Pending; draft.columns.len()];
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."))
-            .canonicalize()
-            .map_err(|e| e.to_string())?;
+            .canonicalize()?;
         let mut evidence = stored.evidence;
         if evidence.schema_version != 1 {
-            return Err("Unsupported Sanger support version".into());
+            return Err(Error::Unsupported("Unsupported Sanger support version".into()));
         }
-        evidence
-            .map_paths(|p| Ok(parent.join(p)))
-            .map_err(|e| e.to_string())?;
+        evidence.map_paths(|p| Ok(parent.join(p)))?;
         let mut session = Self {
             retained: Vec::new(),
             mask: Self::default_mask(draft.columns.len()),
@@ -359,7 +398,7 @@ impl SangerReview {
             decisions,
             events: Vec::new(),
             evidence,
-            anchor: std::path::absolute(path).map_err(|e| e.to_string())?,
+            anchor: std::path::absolute(path)?,
             captures: std::sync::Arc::default(),
         };
         for event in stored.events {
@@ -368,12 +407,15 @@ impl SangerReview {
                 // decisions. Moving/removing that FASTA must not make the
                 // embedded review unrecoverable. Live apply still checks bytes.
                 if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    return Err("Invalid exported consensus SHA-256".into());
+                    return Err(damaged("Invalid exported consensus SHA-256"));
                 }
-                session.events.push(event);
             } else {
-                session.replay_decision(event)?;
+                let change = session.prepare_change(&event).map_err(|e| damaged(&e))?;
+                session
+                    .install_change(&change, true)
+                    .map_err(|e| damaged(&e))?;
             }
+            session.events.push(event);
         }
         Ok(session)
     }
@@ -387,9 +429,15 @@ impl SangerReview {
     }
 
     /// Keep older computed sets and their decisions when a new producer is used.
-    pub fn retain_call_set(&mut self, session: Self) -> Result<(), String> {
-        if !session.retained.is_empty() || self.retained.len() >= 31 {
-            return Err("Too many or nested Sanger call sets".into());
+    pub fn retain_call_set(&mut self, session: Self) -> Result<()> {
+        if !session.retained.is_empty() {
+            return Err(Error::Invalid("Sanger call sets cannot be nested".into()));
+        }
+        if self.retained.len() >= 31 {
+            return Err(Error::Limit {
+                what: "Sanger call sets".into(),
+                limit: 32,
+            });
         }
         if self.draft.inputs.len() != 1
             || session.draft.inputs.len() != 1
@@ -397,7 +445,9 @@ impl SangerReview {
                 .sha256
                 .eq_ignore_ascii_case(&session.draft.inputs[0].sha256)
         {
-            return Err("Sanger call sets refer to different source bytes".into());
+            return Err(Error::Invalid(
+                "Sanger call sets refer to different source bytes".into(),
+            ));
         }
         if !self
             .call_sets()
@@ -409,11 +459,7 @@ impl SangerReview {
         Ok(())
     }
 
-    pub fn select_call_set(&mut self, id: &str) -> Result<(), String> {
-        self.swap_call_set(id)
-    }
-
-    fn swap_call_set(&mut self, id: &str) -> Result<(), String> {
+    pub fn select_call_set(&mut self, id: &str) -> Result<()> {
         if self.draft_sha256 == id {
             return Ok(());
         }
@@ -421,7 +467,7 @@ impl SangerReview {
             .retained
             .iter()
             .position(|set| set.draft_sha256 == id)
-            .ok_or("Unknown Sanger call set")?;
+            .ok_or_else(|| Error::Invalid("Unknown Sanger call set".into()))?;
         let mut retained = std::mem::take(&mut self.retained);
         std::mem::swap(self, &mut retained[index]);
         // Selection swaps the same two positions; inverse selection restores exact ordering.
@@ -468,34 +514,22 @@ impl SangerReview {
         )
     }
 
-    fn replay_decision(&mut self, op: ReviewOp) -> Result<(), String> {
-        if let ReviewOp::Export { path, sha256 } = &op {
-            let actual = basecraft_io::sha256_file(path).map_err(|e| e.to_string())?;
-            if actual != *sha256 {
-                return Err("Exported consensus changed since review".into());
-            }
-        } else {
-            let change = self.prepare_change(&op)?;
-            self.install_change(&change, true)?;
-        }
-        self.events.push(op);
-        Ok(())
-    }
-
     /// Export only a fully resolved specimen sequence. The output hash is a
     /// replayable operation; source AB1 and draft paths can never be replaced.
-    pub(crate) fn write_consensus(&self, path: &Path, label: &str) -> Result<String, String> {
-        let sequence = self
-            .resolved_sequence()
-            .ok_or("Resolve every review column before export")?;
+    pub(crate) fn write_consensus(&self, path: &Path, label: &str) -> Result<String> {
+        let sequence = self.resolved_sequence().ok_or_else(|| {
+            Error::NotReady("Resolve every review column before export".into())
+        })?;
         if sequence.is_empty() {
-            return Err("Resolved consensus is empty".into());
+            return Err(Error::NotReady("Resolved consensus is empty".into()));
         }
         if path.exists()
             || path == self.draft_path
             || self.draft.inputs.iter().any(|read| read.path == path)
         {
-            return Err("Choose a new output file distinct from the source traces".into());
+            return Err(Error::OutputConflict(
+                "Choose a new output file distinct from the source traces".into(),
+            ));
         }
         let label: String = label
             .chars()
@@ -508,7 +542,7 @@ impl SangerReview {
             })
             .collect();
         if label.is_empty() {
-            return Err("Give the specimen a name".into());
+            return Err(Error::MissingChoice("Give the specimen a name".into()));
         }
         let fasta = format!(">{label}\n{sequence}\n");
         // Same-filesystem no-clobber promotion protects a file created after
@@ -517,13 +551,11 @@ impl SangerReview {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-        std::io::Write::write_all(staged.as_file_mut(), fasta.as_bytes())
-            .map_err(|e| e.to_string())?;
-        staged.as_file().sync_all().map_err(|e| e.to_string())?;
-        staged.persist_noclobber(path).map_err(|e| e.to_string())?;
-        let sha256 = basecraft_io::sha256_file(path).map_err(|e| e.to_string())?;
-        Ok(sha256)
+        let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+        std::io::Write::write_all(staged.as_file_mut(), fasta.as_bytes())?;
+        staged.as_file().sync_all()?;
+        staged.persist_noclobber(path).map_err(|e| e.error)?;
+        Ok(basecraft_io::sha256_file(path)?)
     }
 
     /// Initial automatic triage can be regenerated when orienting a fresh draft.
@@ -543,19 +575,19 @@ impl SangerReview {
 
 pub(crate) fn read_journal_record(
     record: &basecraft_protocol::sanger_records::ReviewRecord,
-) -> crate::Result<StoredCallSets> {
+) -> Result<StoredCallSets> {
     if record.hash.len() != 67
         || !record.hash.starts_with("b3:")
         || !record.hash[3..].bytes().all(|b| b.is_ascii_hexdigit())
     {
-        return Err(crate::Error::Damaged {
+        return Err(Error::Damaged {
             path: record.path.clone(),
             detail: "Invalid review record digest".into(),
         });
     }
     let bytes = crate::records::provenance::read_record(&record.path)?;
     if basecraft_io::hash_bytes(&bytes) != record.hash {
-        return Err(crate::Error::Damaged {
+        return Err(Error::Damaged {
             path: record.path.clone(),
             detail: "Sanger analysis record changed".into(),
         });
@@ -563,15 +595,16 @@ pub(crate) fn read_journal_record(
     Ok(basecraft_protocol::records::decode(&bytes)?)
 }
 
-pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {
+pub fn instrument_review(path: &Path) -> Result<SangerReview> {
     use basecraft_docs::sanger::{
         DraftColumn, InputRead, Orientation, ReadSupport, SupportKind, TraceCalls,
     };
-    let capture = CapturedInput::open(path).map_err(|e| e.to_string())?;
+    let capture = CapturedInput::open(path)?;
     let path = capture.path().to_path_buf();
-    let trace = basecraft_io::abif::parse(capture.bytes()).map_err(|e| e.to_string())?;
+    let trace = basecraft_io::abif::parse(capture.bytes())?;
     let calls = trace.display_calls();
-    let sequence = String::from_utf8(calls.bases.clone()).map_err(|e| e.to_string())?;
+    let sequence =
+        String::from_utf8(calls.bases.clone()).map_err(|e| damaged(&path, e.to_string()))?;
     let length = sequence.len();
     let draft = SangerDraft { argv: Vec::new(),
         status: "draft_requires_review".into(), engine: "ABI".into(),
@@ -592,7 +625,7 @@ pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {
     review
         .captures
         .lock()
-        .map_err(|e| e.to_string())?
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(path, capture);
     Ok(review)
 }
@@ -869,6 +902,7 @@ mod moved_and_failed_recovery_tests {
                 loaded
                     .save(&unknown)
                     .unwrap_err()
+                    .to_string()
                     .contains("already exists")
             );
             assert_eq!(std::fs::read(&unknown).unwrap(), b"unrelated");
@@ -894,11 +928,11 @@ mod moved_and_failed_recovery_tests {
         review.save(&path).unwrap();
         let symlink = folder.join("symlink.json");
         std::os::unix::fs::symlink(&path, &symlink).unwrap();
-        assert!(review.save(&symlink).unwrap_err().contains("symbolic link"));
+        assert!(review.save(&symlink).unwrap_err().to_string().contains("symbolic link"));
         let hardlink = folder.join("hardlink.json");
         std::fs::hard_link(&path, &hardlink).unwrap();
-        assert!(review.save(&hardlink).unwrap_err().contains("hard links"));
-        assert!(review.save(&path).unwrap_err().contains("hard links"));
+        assert!(review.save(&hardlink).unwrap_err().to_string().contains("hard links"));
+        assert!(review.save(&path).unwrap_err().to_string().contains("hard links"));
         std::fs::remove_file(&hardlink).unwrap();
         let parent_alias = tmp.path().join("alias");
         std::os::unix::fs::symlink(&folder, &parent_alias).unwrap();
@@ -941,7 +975,8 @@ mod moved_and_failed_recovery_tests {
                 review
                     .save(&path)
                     .unwrap_err()
-                    .contains("analysis_input_conflict")
+                    .code()
+                    == "analysis_input_conflict"
             );
             assert_eq!(std::fs::read(&path).unwrap(), before);
             if policy == SavePolicy::PreserveCopy {
@@ -999,7 +1034,7 @@ mod moved_and_failed_recovery_tests {
         std::fs::create_dir(&binding).unwrap();
         let before = std::fs::read(&path).unwrap();
         let error = review.save(&path).unwrap_err();
-        assert!(error.contains("binding"), "{error}");
+        assert!(error.to_string().contains("binding"), "{error}");
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(review.decision(1), Some(&ReviewChoice::Edit('T')));
         std::fs::remove_dir(&binding).unwrap();

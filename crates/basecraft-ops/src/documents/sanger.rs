@@ -46,7 +46,7 @@ impl Document for SangerReview {
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         if let Op::SangerSelect { call_set } = op {
             let before = self.draft_sha256.clone();
-            self.select_call_set(call_set).map_err(Error::Invalid)?;
+            self.select_call_set(call_set)?;
             return Ok((Inverse::SangerSelect(before), None));
         }
         if let Op::SangerUpdate { review } = op {
@@ -70,7 +70,7 @@ impl Document for SangerReview {
     }
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         if let Inverse::SangerSelect(before) = inverse {
-            return self.select_call_set(before).map_err(Error::Invalid);
+            return self.select_call_set(before);
         }
         if let Inverse::SangerUpdate(before) = inverse {
             *self = (**before).clone();

@@ -287,6 +287,25 @@ fn finish(id: u64, cancelled: bool, ended: Ended) {
 
 const INTERRUPTED: &str = "Interrupted by an internal failure";
 
+/// A job's work panicked. Each error type a job returns says how it shows this.
+pub(crate) struct Interrupted;
+
+impl From<Interrupted> for String {
+    fn from(_: Interrupted) -> Self {
+        INTERRUPTED.into()
+    }
+}
+
+impl From<Interrupted> for basecraft_plugin_host::Error {
+    fn from(_: Interrupted) -> Self {
+        Self::Io(std::io::Error::other(INTERRUPTED))
+    }
+}
+
+/// What a job's error must offer: text for the job list, and a value for a panic.
+pub(crate) trait JobError: std::fmt::Display + From<Interrupted> + Send + 'static {}
+impl<E: std::fmt::Display + From<Interrupted> + Send + 'static> JobError for E {}
+
 /// The one place the desktop app starts a thread. `body` runs once.
 pub(crate) fn spawn(name: &str, body: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
     std::thread::Builder::new()
@@ -295,15 +314,15 @@ pub(crate) fn spawn(name: &str, body: impl FnOnce() + Send + 'static) -> std::io
         .map(|_| ())
 }
 
-type Summary<R> = Box<dyn Fn(&Result<R, String>) -> Ended + Send>;
+type Summary<R, E> = Box<dyn Fn(&Result<R, E>) -> Ended + Send>;
 /// A session job's summary sees the returned session beside the result.
-type SessionSummary<R> = Summary<(Session, Result<R, String>)>;
+type SessionSummary<R, E> = Summary<(Session, Result<R, E>), E>;
 
-fn run<T, R: Send + 'static>(
+fn run<T, R: Send + 'static, E: JobError>(
     owner: impl Owner<T>,
-    listing: Option<(Listing, Summary<R>)>,
-    work: impl FnOnce(&Work) -> Result<R, String> + Send + 'static,
-    done: impl FnOnce(Pin<&mut T>, Result<R, String>) + Send + 'static,
+    listing: Option<(Listing, Summary<R, E>)>,
+    work: impl FnOnce(&Work) -> Result<R, E> + Send + 'static,
+    done: impl FnOnce(Pin<&mut T>, Result<R, E>) + Send + 'static,
 ) -> std::io::Result<Work> {
     let (entry, handle, summary) = match listing {
         Some((listing, summary)) => {
@@ -315,7 +334,7 @@ fn run<T, R: Send + 'static>(
     let worker = handle.clone();
     let started = spawn("basecraft-job", move || {
         let result = catch_unwind(AssertUnwindSafe(|| work(&worker)))
-            .unwrap_or_else(|_| Err(INTERRUPTED.into()));
+            .unwrap_or_else(|_| Err(Interrupted.into()));
         if let (Some(id), Some(summary)) = (entry, &summary) {
             finish(id, worker.cancelled(), summary(&result));
         }
@@ -334,13 +353,17 @@ fn run<T, R: Send + 'static>(
     started.map(|()| handle)
 }
 
-fn summarize<R: Outcome>(result: &Result<R, String>) -> Ended {
+fn summarize<R: Outcome, E: std::fmt::Display>(result: &Result<R, E>) -> Ended {
     match result {
         Ok(value) => value.ended(),
-        Err(error) => Ended {
-            error: Some(error.clone()),
-            result: String::new(),
-        },
+        Err(error) => failed(error),
+    }
+}
+
+fn failed(error: &impl std::fmt::Display) -> Ended {
+    Ended {
+        error: Some(error.to_string()),
+        result: String::new(),
     }
 }
 
@@ -354,14 +377,15 @@ pub(crate) fn start<T, R: Send + 'static>(
     run(owner, None, work, done)
 }
 
-/// [`start`] for a job that appears in the job list.
-pub(crate) fn start_listed<T, R: Outcome + Send + 'static>(
+/// [`start`] for a job that appears in the job list. Its error may be typed
+/// (a Sanger stage keeps the plugin host's error); the list shows its text.
+pub(crate) fn start_listed<T, R: Outcome + Send + 'static, E: JobError>(
     owner: impl Owner<T>,
     listing: Listing,
-    work: impl FnOnce(&Work) -> Result<R, String> + Send + 'static,
-    done: impl FnOnce(Pin<&mut T>, Result<R, String>) + Send + 'static,
+    work: impl FnOnce(&Work) -> Result<R, E> + Send + 'static,
+    done: impl FnOnce(Pin<&mut T>, Result<R, E>) + Send + 'static,
 ) -> std::io::Result<Work> {
-    run(owner, Some((listing, Box::new(summarize::<R>))), work, done)
+    run(owner, Some((listing, Box::new(summarize::<R, E>))), work, done)
 }
 
 /// Run `task` with the document's Session moved off the window thread. The
@@ -384,16 +408,16 @@ pub(crate) fn with_session_listed<T, R: Outcome + Send + 'static>(
     task: impl FnOnce(&mut Session, &Work) -> Result<R, String> + Send + 'static,
     done: impl FnOnce(Pin<&mut T>, Session, Result<R, String>) + Send + 'static,
 ) -> Result<Work, String> {
-    let summary: SessionSummary<R> = Box::new(|result| match result {
+    let summary: SessionSummary<R, String> = Box::new(|result| match result {
         Ok((_, result)) => summarize(result),
-        Err(error) => summarize::<R>(&Err(error.clone())),
+        Err(error) => failed(error),
     });
     session_job(owner, Some((listing, summary)), session, task, done)
 }
 
 fn session_job<T, R: Send + 'static>(
     owner: impl Owner<T>,
-    listing: Option<(Listing, SessionSummary<R>)>,
+    listing: Option<(Listing, SessionSummary<R, String>)>,
     session: &mut Option<Session>,
     task: impl FnOnce(&mut Session, &Work) -> Result<R, String> + Send + 'static,
     done: impl FnOnce(Pin<&mut T>, Session, Result<R, String>) + Send + 'static,
@@ -415,7 +439,7 @@ fn session_job<T, R: Send + 'static>(
                 .take()
                 .ok_or(INTERRUPTED)?;
             let result = catch_unwind(AssertUnwindSafe(|| task(&mut session, work)))
-                .unwrap_or_else(|_| Err(INTERRUPTED.into()));
+                .unwrap_or_else(|_| Err(Interrupted.into()));
             Ok((session, result))
         },
         move |object, result| {
@@ -632,7 +656,7 @@ mod tests {
                 operation: "fixture failure".into(),
                 source: String::new(),
             },
-            |_| Err::<String, _>("no plugin".into()),
+            |_| Err::<String, String>("no plugin".into()),
             |_: Pin<&mut Probe>, _| {},
         )
         .unwrap();
