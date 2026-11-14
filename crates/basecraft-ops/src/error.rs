@@ -57,8 +57,31 @@ pub enum Error {
         basecraft_protocol::VERSION
     )]
     NewerFieldsDropped(Vec<(PathBuf, basecraft_protocol::records::UnknownFields)>),
+    /// Bad input that fits no other kind.
     #[error("invalid operation: {0}")]
     Invalid(String),
+    /// A choice the request needs and has no default for: what to choose.
+    #[error("{0}")]
+    MissingChoice(String),
+    /// The destination already holds something basecraft will not replace.
+    #[error("{0}")]
+    OutputConflict(String),
+    /// An earlier step has to happen first (save, export, review, relink).
+    #[error("{0}")]
+    NotReady(String),
+    /// What the request was prepared from has changed; prepare it again.
+    #[error("{0}")]
+    Outdated(String),
+    /// The submission package was written, but the document recording the
+    /// export could not be saved.
+    #[error(
+        "package written but export identities were not saved: {0}; keep this document open and retry saving before importing accessions"
+    )]
+    PackageNotRecorded(Box<Error>),
+    #[error(transparent)]
+    Preferences(#[from] basecraft_platform::settings::Error),
+    #[error(transparent)]
+    AppPaths(#[from] basecraft_platform::paths::PathError),
     #[error("{0}")]
     EvidenceConflict(Box<crate::records::input_evidence::EvidenceConflict>),
     #[error("evidence_check_incomplete: could not check all analysis evidence")]
@@ -122,17 +145,32 @@ pub(crate) fn invalid(msg: impl Into<String>) -> Error {
     Error::Invalid(msg.into())
 }
 
+pub(crate) fn damaged(path: impl Into<PathBuf>, detail: impl Into<String>) -> Error {
+    Error::Damaged {
+        path: path.into(),
+        detail: detail.into(),
+    }
+}
+
 impl Error {
     /// The single mapping shared by CLI, MCP, and registered operation jobs.
     pub fn operation_code(&self) -> basecraft_protocol::operation::OperationErrorCode {
         use basecraft_protocol::operation::OperationErrorCode as Code;
         match self {
-            Self::StaleRevision { .. } => Code::StaleRevision,
+            Self::StaleRevision { .. } | Self::Outdated(_) => Code::StaleRevision,
             Self::ChangedOnDisk { .. } | Self::AlignmentChanged { .. } => Code::ChangedOnDisk,
             Self::NotFound { .. } | Self::FolderUnavailable { .. } | Self::NoMetadata => {
                 Code::NotFound
             }
-            Self::Damaged { .. } => Code::Damaged,
+            Self::Damaged { .. }
+            | Self::Preferences(basecraft_platform::settings::Error::Invalid(_)) => Code::Damaged,
+            Self::Preferences(basecraft_platform::settings::Error::Busy) => Code::Busy,
+            Self::Preferences(basecraft_platform::settings::Error::Io(e)) => io_code(e),
+            Self::AppPaths(_) => Code::Unsupported,
+            Self::MissingChoice(_) => Code::MissingChoice,
+            Self::OutputConflict(_) => Code::OutputConflict,
+            Self::NotReady(_) => Code::NotReady,
+            Self::PackageNotRecorded(_) => Code::PublicationIncomplete,
             Self::Limit { .. } => Code::Limit,
             Self::Unsupported(_) => Code::Unsupported,
             Self::RecordNamesRepeat(_) => Code::RecordNamesRepeat,
@@ -144,13 +182,7 @@ impl Error {
             Self::Access(crate::access::AccessError::DestinationExists) => Code::OutputConflict,
             Self::Access(crate::access::AccessError::Io(e))
             | Self::Io(e)
-            | Self::Format(basecraft_io::Error::Io(e)) => {
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    Code::PermissionDenied
-                } else {
-                    Code::IoError
-                }
-            }
+            | Self::Format(basecraft_io::Error::Io(e)) => io_code(e),
             Self::Format(_) => Code::FormatError,
             Self::Json(_)
             | Self::Invalid(_)
@@ -182,5 +214,14 @@ impl Error {
     /// Stable wire spelling; messages are for people, not dispatch.
     pub fn code(&self) -> &'static str {
         self.operation_code().as_str()
+    }
+}
+
+fn io_code(error: &std::io::Error) -> basecraft_protocol::operation::OperationErrorCode {
+    use basecraft_protocol::operation::OperationErrorCode as Code;
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        Code::PermissionDenied
+    } else {
+        Code::IoError
     }
 }

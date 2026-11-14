@@ -30,7 +30,8 @@ use basecraft_protocol::submission::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::error::invalid;
+use crate::Error;
+use crate::error::{damaged, invalid};
 use crate::{DocId, Result, Session};
 
 /// Submission documents are named `<name>.submission.json`.
@@ -56,17 +57,17 @@ pub fn load(path: &Path) -> Result<Submission> {
 pub(crate) fn load_from(path: &Path, bytes: &[u8]) -> Result<Submission> {
     let (sub, writer) =
         basecraft_protocol::records::decode_written::<Submission>(bytes).map_err(|e| {
-            crate::Error::Damaged {
+            Error::Damaged {
                 path: path.to_path_buf(),
                 detail: format!("not a submission: {e}"),
             }
         })?;
     if sub.version != SUBMISSION_VERSION {
-        return Err(crate::Error::Unsupported(
+        return Err(Error::Unsupported(
             basecraft_protocol::records::other_format(&writer, sub.version, SUBMISSION_VERSION),
         ));
     }
-    model::validate(&sub).map_err(|e| invalid(e.0))?;
+    model::validate(&sub).map_err(|e| damaged(path, e.0))?;
     Ok(sub)
 }
 
@@ -95,7 +96,7 @@ pub fn create(session: &mut Session, path: &Path, alignment: &Path) -> Result<Do
         session.root().join(path)
     };
     if path.exists() {
-        return Err(invalid(format!(
+        return Err(Error::OutputConflict(format!(
             "{} already exists; open it instead",
             path.display()
         )));
@@ -173,10 +174,10 @@ pub fn plan_inclusion_submission(
     let source = sub
         .source
         .as_ref()
-        .ok_or_else(|| invalid("Choose a source alignment"))?;
+        .ok_or_else(|| Error::MissingChoice("Choose a source alignment".into()))?;
     let hash = basecraft_io::hash_file(&project.join(&source.document))?;
     if hash != source.hash {
-        return Err(crate::Error::ChangedOnDisk {
+        return Err(Error::ChangedOnDisk {
             path: project.join(&source.document),
         });
     }
@@ -185,12 +186,12 @@ pub fn plan_inclusion_submission(
     let rows = read_rows(&project.join(&source.document))?;
     // Detect replacement between hashing and reading; immutable byte input is cached by GUI review separately.
     if basecraft_io::hash_file(&project.join(&source.document))? != hash {
-        return Err(crate::Error::ChangedOnDisk {
+        return Err(Error::ChangedOnDisk {
             path: project.join(&source.document),
         });
     }
     if metadata_evidence(project)? != metadata_stamp {
-        return Err(crate::Error::ChangedOnDisk {
+        return Err(Error::ChangedOnDisk {
             path: crate::metadata::manifest_path(project),
         });
     }
@@ -231,8 +232,9 @@ pub(crate) fn verify_inclusion(
 ) -> Result<()> {
     let current = plan_inclusion_submission(project, sub, &plan.rule)?;
     if &current != plan {
-        return Err(invalid(
-            "Stale inclusion preview: target, source or metadata evidence changed; preview again",
+        return Err(Error::Outdated(
+            "Stale inclusion preview: target, source or metadata evidence changed; preview again"
+                .into(),
         ));
     }
     Ok(())
@@ -244,7 +246,7 @@ pub fn inclusion_preset_edit(
     rule: InclusionRule,
 ) -> Result<basecraft_protocol::metadata::MetadataEdit> {
     if rule.name.trim().is_empty() {
-        return Err(invalid("Give the preset a name"));
+        return Err(Error::MissingChoice("Give the preset a name".into()));
     }
     model::inclusion_rows(&Submission::default(), &rule, &[]).map_err(|e| invalid(e.0))?;
     let mut settings = meta.import.clone();
@@ -258,7 +260,7 @@ pub fn save_inclusion_preset(session: &mut Session, rule: InclusionRule) -> Resu
     // Validate before creating any metadata document.
     inclusion_preset_edit(&ProjectMetadata::default(), rule.clone())?;
     let doc =
-        crate::metadata::open(session, true)?.ok_or_else(|| invalid("No metadata document"))?;
+        crate::metadata::open(session, true)?.ok_or(Error::NoMetadata)?;
     let edit = inclusion_preset_edit(session.metadata(doc)?, rule)?;
     session.apply(
         doc,
@@ -279,7 +281,7 @@ pub fn read_rows(path: &Path) -> Result<Vec<SourceRow>> {
     let bytes = std::fs::read(path)?;
     let index = basecraft_io::fasta::FastaIndex::build(&bytes)?;
     if index.records.is_empty() {
-        return Err(crate::Error::Empty(path.to_path_buf()));
+        return Err(Error::Empty(path.to_path_buf()));
     }
     index
         .records
@@ -330,7 +332,7 @@ pub fn project_metadata(project: &Path) -> Result<(ProjectMetadata, Option<Strin
     let manifest_hash = basecraft_io::hash_file(&manifest)?;
     let opened = crate::metadata::load(&manifest)?;
     if metadata_evidence(project)? != before {
-        return Err(crate::Error::ChangedOnDisk {
+        return Err(Error::ChangedOnDisk {
             path: manifest.clone(),
         });
     }
@@ -339,12 +341,10 @@ pub fn project_metadata(project: &Path) -> Result<(ProjectMetadata, Option<Strin
 
 /// The submitter preference, from the user's settings.
 pub fn submitter_preference() -> Result<Submitter> {
-    let paths =
-        basecraft_platform::paths::AppPaths::discover().map_err(|e| invalid(e.to_string()))?;
-    basecraft_platform::settings::SettingsStore::new(paths.preferences())
-        .load()
-        .map(|p| p.submitter)
-        .map_err(|e| invalid(e.to_string()))
+    let paths = basecraft_platform::paths::AppPaths::discover()?;
+    Ok(basecraft_platform::settings::SettingsStore::new(paths.preferences())
+        .load()?
+        .submitter)
 }
 
 /// A review of a submission against its source alignment, the project
@@ -419,7 +419,7 @@ pub fn review_submission_cached_with_stage(
     {
         let (metadata, read_hash) = project_metadata(project)?;
         if read_hash != metadata_hash || metadata_evidence(project)? != metadata_stamp {
-            return Err(crate::Error::ChangedOnDisk {
+            return Err(Error::ChangedOnDisk {
                 path: manifest.clone(),
             });
         }
@@ -429,7 +429,7 @@ pub fn review_submission_cached_with_stage(
         .metadata
         .as_ref()
         .map(|(_, metadata)| metadata)
-        .ok_or_else(|| invalid("No metadata snapshot"))?;
+        .ok_or(Error::NoMetadata)?;
     let mut issues = Vec::new();
     let mut source_hash = None;
     let mut rows = std::sync::Arc::new(Vec::new());
@@ -444,7 +444,7 @@ pub fn review_submission_cached_with_stage(
                 {
                     let parsed = read_rows(&path)?;
                     if basecraft_io::hash_file(&path)? != hash {
-                        return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+                        return Err(Error::ChangedOnDisk { path: path.clone() });
                     }
                     cache.source = Some((source.clone(), std::sync::Arc::new(parsed)));
                 }
@@ -1070,8 +1070,8 @@ pub fn export(
     let sub = checked(session, doc)?.clone();
     // Its records would be read in no frame and exported with no code.
     if matches!(sub.batch.marker, Marker::Coding { .. }) && sub.batch.genetic_code.is_none() {
-        return Err(invalid(
-            "Choose the genetic code for this coding marker before export",
+        return Err(Error::MissingChoice(
+            "Choose the genetic code for this coding marker before export".into(),
         ));
     }
     let directory = if directory.is_absolute() {
@@ -1082,8 +1082,8 @@ pub fn export(
     let root = session.root().canonicalize()?;
     let review = review_submission(&root, &sub, submitter)?;
     if !review.selection_confirmed {
-        return Err(invalid(
-            "review and confirm the current row selection before export",
+        return Err(Error::NotReady(
+            "review and confirm the current row selection before export".into(),
         ));
     }
     std::fs::create_dir_all(&directory)?;
@@ -1093,7 +1093,7 @@ pub fn export(
     }
     let manifest = directory.join("package.json");
     if directory.read_dir()?.next().is_some() && !manifest.is_file() {
-        return Err(invalid(format!(
+        return Err(Error::OutputConflict(format!(
             "{} has other files; choose an empty folder or an earlier package",
             directory.display()
         )));
@@ -1102,7 +1102,7 @@ pub fn export(
         let existing: Value =
             basecraft_protocol::records::decode(&std::fs::read(&manifest)?).unwrap_or(Value::Null);
         if existing["schema"] != PACKAGE_SCHEMA {
-            return Err(invalid(format!(
+            return Err(Error::OutputConflict(format!(
                 "{} is not a Basecraft submission package",
                 directory.display()
             )));
@@ -1209,7 +1209,9 @@ pub fn export(
             },
         },
     )?;
-    session.save(doc, None).map_err(|error| invalid(format!("package written but export identities were not saved: {error}; keep this document open and retry saving before importing accessions")))?;
+    session
+        .save(doc, None)
+        .map_err(|error| Error::PackageNotRecorded(Box::new(error)))?;
     Ok(summary)
 }
 
@@ -1252,8 +1254,8 @@ fn package_inputs(package: &Path) -> Result<(Value, String)> {
         *slot = std::fs::read(package.join("genbank").join(format!("{BASE}.{ext}")))?;
     }
     if input_hash(&files) != hash {
-        return Err(invalid(
-            "the package's genbank files changed since export; export the package again",
+        return Err(Error::Outdated(
+            "the package's genbank files changed since export; export the package again".into(),
         ));
     }
     Ok((manifest, hash))
@@ -1307,7 +1309,7 @@ fn verified_reports(
     let run = Path::new(
         outcome["evidence"]
             .as_str()
-            .ok_or_else(|| invalid("validation has no registered run evidence"))?,
+            .ok_or_else(|| damaged(package, "validation has no registered run evidence"))?,
     );
     let run_id = outcome["run_id"].as_str().unwrap_or_default();
     if run_id.is_empty()
@@ -1315,7 +1317,8 @@ fn verified_reports(
         || outcome["operation"] != VALIDATE_OPERATION
         || read(&run.join("runtime.json"))? != *outcome
     {
-        return Err(invalid(
+        return Err(damaged(
+            run,
             "validation outcome differs from its registered run",
         ));
     }
@@ -1329,7 +1332,7 @@ fn verified_reports(
         || outcome["effective_parameters"] != execution.effective_parameters
         || execution.inputs.len() != 4
     {
-        return Err(invalid("validation execution identity does not match"));
+        return Err(damaged(run, "validation execution identity does not match"));
     }
     let request = read(&run.join("request.json"))?;
     for (role, ext) in [
@@ -1343,13 +1346,13 @@ fn verified_reports(
             .inputs
             .get(role)
             .filter(|e| e.len() == 1)
-            .ok_or_else(|| invalid("validation has incomplete submitted input evidence"))?;
+            .ok_or_else(|| damaged(run, "validation has incomplete submitted input evidence"))?;
         let evidence = &evidence[0];
         let expected = basecraft_io::hash_file(&current)?;
         let original = evidence
             .original_path
             .as_deref()
-            .ok_or_else(|| invalid("validation input has no source path"))?;
+            .ok_or_else(|| damaged(run, "validation input has no source path"))?;
         let ledger =
             crate::records::input_evidence::read_input(&run.join(&evidence.run_directory))?;
         if run.join(original).canonicalize()? != current.canonicalize()?
@@ -1360,25 +1363,25 @@ fn verified_reports(
             || ledger.submitted_hash != expected
             || ledger.transformation != "identity-v1"
         {
-            return Err(invalid(
-                "stale or unrelated validation inputs; validate the exported package again",
+            return Err(Error::Outdated(
+                "stale or unrelated validation inputs; validate the exported package again".into(),
             ));
         }
     }
     let destination = request["destinations"]["reports"]
         .as_str()
-        .ok_or_else(|| invalid("validation has no reports destination"))?;
+        .ok_or_else(|| damaged(run, "validation has no reports destination"))?;
     let destination = root.join(destination);
     if destination.parent().and_then(|p| p.canonicalize().ok())
         != Some(validation_dir(package, hash).canonicalize()?)
     {
-        return Err(invalid(
-            "validation belongs to a different package generation",
+        return Err(Error::Outdated(
+            "validation belongs to a different package generation".into(),
         ));
     }
     let artifacts = outcome["artifacts"]
         .as_array()
-        .ok_or_else(|| invalid("missing validation artifacts"))?;
+        .ok_or_else(|| damaged(run, "missing validation artifacts"))?;
     if artifacts.is_empty() {
         return Ok(None);
     }
@@ -1387,14 +1390,15 @@ fn verified_reports(
         let path = root.join(
             artifact["path"]
                 .as_str()
-                .ok_or_else(|| invalid("missing validation artifact path"))?,
+                .ok_or_else(|| damaged(run, "missing validation artifact path"))?,
         );
         if artifact["role"] != "reports"
             || basecraft_io::hash_file(&path)? != artifact["digest"].as_str().unwrap_or_default()
             || crate::records::provenance::bundle_for_result(&path, None).canonicalize()?
                 != run.canonicalize()?
         {
-            return Err(invalid(
+            return Err(damaged(
+                run,
                 "validation artifact or publication evidence differs",
             ));
         }
@@ -1402,7 +1406,7 @@ fn verified_reports(
         let project = crate::project::Project::new(root)?;
         let issues = crate::records::provenance::verify(&path, Some(&project))?;
         if !issues.is_empty() {
-            return Err(crate::Error::Damaged {
+            return Err(Error::Damaged {
                 path: path.clone(),
                 detail: format!(
                     "validation publication verification failed: {}",
@@ -1426,7 +1430,10 @@ fn verified_reports(
                     .is_some_and(|p| root.join(p).canonicalize().ok() == path.canonicalize().ok())
             })
         {
-            return Err(invalid("validation folder contains an unpublished output"));
+            return Err(damaged(
+                &reports,
+                "validation folder contains an unpublished output",
+            ));
         }
     }
     Ok(Some(reports))
@@ -1687,8 +1694,8 @@ pub fn plan_accessions(
         }
     }
     if ids.is_empty() {
-        return Err(invalid(
-            "export this submission before importing returned accessions",
+        return Err(Error::NotReady(
+            "export this submission before importing returned accessions".into(),
         ));
     }
     let originals: BTreeSet<&String> = ids.values().flatten().collect();
