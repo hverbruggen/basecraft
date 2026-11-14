@@ -284,13 +284,13 @@ use std::pin::Pin;
 use std::time::Instant;
 
 use basecraft_docs::TreeDoc;
-use basecraft_ops::{DocId, Session};
+use basecraft_ops::Session;
 use basecraft_protocol::delimitation::TreeDrawingEdit;
 use basecraft_protocol::{CladeAnnotation, Op, SupportPlacement, TreeStyle};
 use basecraft_viewmodel::label_placement::{Answer, Questions, Step};
 use basecraft_viewmodel::tree::TipColumn;
 use basecraft_viewmodel::tree::to_svg_with_style;
-use basecraft_viewmodel::{Frame, Theme, TreeView};
+use basecraft_viewmodel::{Frame, TreeView};
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString};
 use serde_json::{Value, json};
@@ -301,127 +301,32 @@ use crate::bridge::{
     took,
 };
 
-#[allow(clippy::struct_excessive_bools)]
-pub struct TreeRust {
-    labels: Option<basecraft_viewmodel::label_placement::Questions>,
-    label_question: QString,
-    find: basecraft_viewmodel::find::Session,
-    find_status: QString,
-    find_count: i32,
-    find_row: i32,
-    find_hit_y: f64,
-    find_nucleotide: bool,
-    find_rows: QString,
-    find_reveals: i32,
-    history_revision: QString,
-    overview_content: QString,
-    overview_matches: QString,
-    overview_match_cache: basecraft_viewmodel::overview::Cache,
-    overview_cache: basecraft_viewmodel::overview::Cache,
-    frame: QByteArray,
-    canvas_geometry: QString,
-    last_taxa: String,
-    status: QString,
-    message: QString,
-    message_kind: QString,
-    ok_color: QString,
-    error_color: QString,
-    background: QString,
-    foreground: QString,
-    accent: QString,
-    mono_font: QString,
-    file_path: QString,
-    dirty: bool,
-    refused_edit: QString,
-    busy: bool,
-    zoom_text: QString,
-    hscroll_pos: f64,
-    hscroll_size: f64,
-    vscroll_pos: f64,
-    vscroll_size: f64,
-    has_selection: bool,
-    can_auto_root: bool,
-    tip_selected: bool,
-    linked_alignment: QString,
-    source_alignment: QString,
-    alignment_link_status: QString,
-    alignment_link_inferred: bool,
-    support_placement: QString,
-    tip_font: i32,
-    support_font: i32,
-    branch_width: i32,
-    has_support: bool,
-    display_only: bool,
+crate::editor::editor_state!(TreeRust [drawn documents] {
+    labels: Option<basecraft_viewmodel::label_placement::Questions> = None,
+    label_question: QString = QString::default(),
+    canvas_geometry: QString = QString::from("{}"),
+    last_taxa: String = String::new(),
+    hscroll_pos: f64 = 0.0,
+    hscroll_size: f64 = 1.0,
+    vscroll_pos: f64 = 0.0,
+    vscroll_size: f64 = 1.0,
+    has_selection: bool = false,
+    can_auto_root: bool = false,
+    tip_selected: bool = false,
+    linked_alignment: QString = QString::default(),
+    source_alignment: QString = QString::default(),
+    alignment_link_status: QString = QString::default(),
+    alignment_link_inferred: bool = false,
+    support_placement: QString = QString::from("natural"),
+    tip_font: i32 = 0,
+    support_font: i32 = 0,
+    branch_width: i32 = 0,
+    has_support: bool = false,
+    display_only: bool = false,
+    save_state: crate::editor_save::SaveState = crate::editor_save::SaveState::default(),
+    view: TreeView = TreeView::new(800.0, 600.0),
+});
 
-    session: Option<Session>,
-    save_state: crate::editor_save::SaveState,
-    doc: Option<DocId>,
-    view: TreeView,
-    theme: Theme,
-    scratch: Frame,
-}
-
-impl Default for TreeRust {
-    fn default() -> Self {
-        Self {
-            labels: None,
-            label_question: QString::default(),
-            find: basecraft_viewmodel::find::Session::default(),
-            find_status: QString::default(),
-            find_count: 0,
-            find_row: -1,
-            find_hit_y: 0.0,
-            find_nucleotide: false,
-            find_rows: QString::from("[]"),
-            find_reveals: 0,
-            history_revision: QString::default(),
-            overview_content: QString::from("{\"shapes\":[]}"),
-            overview_matches: QString::from("[]"),
-            overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
-            overview_cache: basecraft_viewmodel::overview::Cache::default(),
-            frame: QByteArray::default(),
-            canvas_geometry: QString::from("{}"),
-            last_taxa: String::new(),
-            status: QString::default(),
-            message: QString::default(),
-            message_kind: QString::default(),
-            ok_color: QString::default(),
-            error_color: QString::default(),
-            background: QString::default(),
-            foreground: QString::default(),
-            accent: QString::default(),
-            mono_font: QString::default(),
-            file_path: QString::default(),
-            dirty: false,
-            refused_edit: QString::default(),
-            busy: false,
-            zoom_text: QString::default(),
-            hscroll_pos: 0.0,
-            hscroll_size: 1.0,
-            vscroll_pos: 0.0,
-            vscroll_size: 1.0,
-            has_selection: false,
-            can_auto_root: false,
-            tip_selected: false,
-            linked_alignment: QString::default(),
-            source_alignment: QString::default(),
-            alignment_link_status: QString::default(),
-            alignment_link_inferred: false,
-            support_placement: QString::from("natural"),
-            tip_font: 0,
-            support_font: 0,
-            branch_width: 0,
-            has_support: false,
-            display_only: false,
-            session: None,
-            save_state: crate::editor_save::SaveState::default(),
-            doc: None,
-            view: TreeView::new(800.0, 600.0),
-            theme: Theme::default(),
-            scratch: Frame::new(),
-        }
-    }
-}
 
 #[allow(clippy::cast_possible_truncation)]
 fn f(v: f64) -> f32 {

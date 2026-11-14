@@ -369,7 +369,7 @@ use basecraft_docs::FeatureId;
 use basecraft_io::genbank::{format_location, parse_location};
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{Feature, Location, Op, Qualifier, Strand};
-use basecraft_viewmodel::{Frame, GenomeView, Mode, Theme};
+use basecraft_viewmodel::{Frame, GenomeView, Mode};
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString, QUrl};
 use serde_json::{Value, json};
@@ -460,104 +460,20 @@ pub(crate) const SHIFT: i32 = 0x0200_0000;
 pub(crate) const CTRL: i32 = 0x0400_0000;
 pub(crate) const ALT: i32 = 0x0800_0000;
 
-// Independent generated QML properties describe document state and caller activity.
-#[allow(clippy::struct_excessive_bools)]
-pub struct ControllerRust {
-    find: basecraft_viewmodel::find::Session,
-    find_status: QString,
-    find_count: i32,
-    find_row: i32,
-    find_hit_y: f64,
-    find_nucleotide: bool,
-    find_rows: QString,
-    find_reveals: i32,
-    history_revision: QString,
-    overview_content: QString,
-    overview_matches: QString,
-    overview_match_cache: basecraft_viewmodel::overview::Cache,
-    overview_cache: basecraft_viewmodel::overview::Cache,
-    frame: QByteArray,
-    status: QString,
-    title: QString,
-    message: QString,
-    message_kind: QString,
-    ok_color: QString,
-    error_color: QString,
-    background: QString,
-    foreground: QString,
-    accent: QString,
-    busy: bool,
-    circular: bool,
-    mode: QString,
-    project_dir: QString,
-    mono_font: QString,
-    file_path: QString,
-    dirty: bool,
-    refused_edit: QString,
-    alphabet_question: QString,
-    zoom_text: QString,
-    scroll_pos: f64,
-    overview_pos: f64,
-    overview_size: f64,
-    scroll_size: f64,
+crate::editor::editor_state!(ControllerRust [drawn documents] {
+    title: QString = QString::from("Basecraft"),
+    circular: bool = false,
+    mode: QString = QString::from("wrapped"),
+    project_dir: QString = QString::default(),
+    alphabet_question: QString = QString::default(),
+    scroll_pos: f64 = 0.0,
+    overview_pos: f64 = 0.0,
+    overview_size: f64 = 1.0,
+    scroll_size: f64 = 1.0,
+    save_state: crate::editor_save::SaveState = crate::editor_save::SaveState::default(),
+    view: GenomeView = GenomeView::new(800.0, 600.0),
+});
 
-    session: Option<Session>,
-    save_state: crate::editor_save::SaveState,
-    doc: Option<DocId>,
-    view: GenomeView,
-    theme: Theme,
-    scratch: Frame,
-}
-
-impl Default for ControllerRust {
-    fn default() -> Self {
-        Self {
-            find: basecraft_viewmodel::find::Session::default(),
-            find_status: QString::default(),
-            find_count: 0,
-            find_row: -1,
-            find_hit_y: 0.0,
-            find_nucleotide: false,
-            find_rows: QString::from("[]"),
-            find_reveals: 0,
-            history_revision: QString::default(),
-            overview_content: QString::from("{\"shapes\":[]}"),
-            overview_matches: QString::from("[]"),
-            overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
-            overview_cache: basecraft_viewmodel::overview::Cache::default(),
-            frame: QByteArray::default(),
-            status: QString::default(),
-            title: QString::from("Basecraft"),
-            message: QString::default(),
-            message_kind: QString::default(),
-            ok_color: QString::default(),
-            error_color: QString::default(),
-            background: QString::default(),
-            foreground: QString::default(),
-            accent: QString::default(),
-            busy: false,
-            circular: false,
-            mode: QString::from("wrapped"),
-            project_dir: QString::default(),
-            mono_font: QString::default(),
-            file_path: QString::default(),
-            dirty: false,
-            refused_edit: QString::default(),
-            alphabet_question: QString::default(),
-            zoom_text: QString::default(),
-            scroll_pos: 0.0,
-            overview_pos: 0.0,
-            overview_size: 1.0,
-            scroll_size: 1.0,
-            session: None,
-            save_state: crate::editor_save::SaveState::default(),
-            doc: None,
-            view: GenomeView::new(800.0, 600.0),
-            theme: Theme::default(),
-            scratch: Frame::new(),
-        }
-    }
-}
 crate::appearance::editor_follows_appearance!(qobject::GenomeController);
 
 /// What a file holds, as the tab and editor kinds name it.

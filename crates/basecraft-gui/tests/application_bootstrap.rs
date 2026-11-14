@@ -38,6 +38,8 @@ mod delimitation_bridge;
 mod document_jobs;
 #[path = "../src/document_open.rs"]
 mod document_open;
+#[path = "../src/editor.rs"]
+mod editor;
 #[path = "../src/editor_save.rs"]
 mod editor_save;
 #[path = "../src/figure_png.rs"]

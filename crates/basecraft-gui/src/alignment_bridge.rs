@@ -323,14 +323,14 @@ use std::pin::Pin;
 use std::time::Instant;
 
 use basecraft_docs::AlignmentDoc;
-use basecraft_ops::{DocId, Session};
+use basecraft_ops::Session;
 use basecraft_plugin_host::file_tool::output_beside;
 
 use crate::document_jobs::{DocumentJob, Finished, bundled, failure, primary_member};
 use basecraft_protocol::Op;
 use basecraft_protocol::operation::OperationOutcome;
 use basecraft_viewmodel::alignment::Region;
-use basecraft_viewmodel::{AlignmentView, Frame, Theme};
+use basecraft_viewmodel::{AlignmentView, Frame};
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString};
 use serde_json::json;
@@ -357,62 +357,28 @@ struct Tool {
 const KEY_SPACE: i32 = 0x20;
 
 // Independent Qt properties plus the background scan state.
-#[allow(clippy::struct_excessive_bools)]
-pub struct AlignmentRust {
-    find: basecraft_viewmodel::find::Session,
-    find_status: QString,
-    find_count: i32,
-    find_row: i32,
-    find_hit_y: f64,
-    find_nucleotide: bool,
-    find_rows: QString,
-    find_reveals: i32,
-    history_revision: QString,
-    overview_content: QString,
-    overview_matches: QString,
-    overview_match_cache: basecraft_viewmodel::overview::Cache,
-    overview_cache: basecraft_viewmodel::overview::Cache,
-    frame: QByteArray,
-    last_taxa: String,
-    status: QString,
-    message: QString,
-    message_kind: QString,
-    ok_color: QString,
-    error_color: QString,
-    background: QString,
-    foreground: QString,
-    accent: QString,
-    mono_font: QString,
-    file_path: QString,
-    dirty: bool,
-    refused_edit: QString,
-    alphabet_question: QString,
-    zoom_text: QString,
-    hscroll_pos: f64,
-    hscroll_size: f64,
-    vscroll_pos: f64,
-    vscroll_size: f64,
-    names_width: f64,
-    insert_mode: bool,
-    busy: bool,
-    bootstrap_running: bool,
-    bootstrap_cancelling: bool,
-    bootstrap_progress: f64,
-    bootstrap_status: QString,
-    tool_job: Option<ActiveTool>,
-    gap_column_count: f64,
-    gap_scan_running: bool,
-    gap_runs: Vec<(u64, u64)>,
-    gap_scan_key: Option<(String, u64)>,
-
-    review_snapshot_dir: Option<tempfile::TempDir>,
-    session: Option<Session>,
-    save_state: crate::editor_save::SaveState,
-    doc: Option<DocId>,
-    view: AlignmentView,
-    theme: Theme,
-    scratch: Frame,
-}
+crate::editor::editor_state!(AlignmentRust [drawn documents] {
+    last_taxa: String = String::new(),
+    alphabet_question: QString = QString::default(),
+    hscroll_pos: f64 = 0.0,
+    hscroll_size: f64 = 1.0,
+    vscroll_pos: f64 = 0.0,
+    vscroll_size: f64 = 1.0,
+    names_width: f64 = 0.0,
+    insert_mode: bool = false,
+    bootstrap_running: bool = false,
+    bootstrap_cancelling: bool = false,
+    bootstrap_progress: f64 = 0.,
+    bootstrap_status: QString = QString::default(),
+    tool_job: Option<ActiveTool> = None,
+    gap_column_count: f64 = -1.0,
+    gap_scan_running: bool = false,
+    gap_runs: Vec<(u64, u64)> = Vec::new(),
+    gap_scan_key: Option<(String, u64)> = None,
+    review_snapshot_dir: Option<tempfile::TempDir> = None,
+    save_state: crate::editor_save::SaveState = crate::editor_save::SaveState::default(),
+    view: AlignmentView = AlignmentView::new(800.0, 600.0),
+});
 
 // The worker and monitor retain this directory until the engine has finished.
 /// A registered operation running on this alignment. Dropping it cancels the
@@ -449,64 +415,6 @@ impl Drop for ActiveTool {
     }
 }
 
-impl Default for AlignmentRust {
-    fn default() -> Self {
-        Self {
-            find: basecraft_viewmodel::find::Session::default(),
-            find_status: QString::default(),
-            find_count: 0,
-            find_row: -1,
-            find_hit_y: 0.0,
-            find_nucleotide: false,
-            find_rows: QString::from("[]"),
-            find_reveals: 0,
-            history_revision: QString::default(),
-            overview_content: QString::from("{\"shapes\":[]}"),
-            overview_matches: QString::from("[]"),
-            overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
-            overview_cache: basecraft_viewmodel::overview::Cache::default(),
-            frame: QByteArray::default(),
-            last_taxa: String::new(),
-            status: QString::default(),
-            message: QString::default(),
-            message_kind: QString::default(),
-            ok_color: QString::default(),
-            error_color: QString::default(),
-            background: QString::default(),
-            foreground: QString::default(),
-            accent: QString::default(),
-            mono_font: QString::default(),
-            file_path: QString::default(),
-            dirty: false,
-            refused_edit: QString::default(),
-            alphabet_question: QString::default(),
-            zoom_text: QString::default(),
-            hscroll_pos: 0.0,
-            hscroll_size: 1.0,
-            vscroll_pos: 0.0,
-            vscroll_size: 1.0,
-            names_width: 0.0,
-            insert_mode: false,
-            busy: false,
-            bootstrap_running: false,
-            bootstrap_cancelling: false,
-            bootstrap_progress: 0.,
-            bootstrap_status: QString::default(),
-            tool_job: None,
-            gap_column_count: -1.0,
-            gap_scan_running: false,
-            gap_runs: Vec::new(),
-            gap_scan_key: None,
-            review_snapshot_dir: None,
-            session: None,
-            save_state: crate::editor_save::SaveState::default(),
-            doc: None,
-            view: AlignmentView::new(800.0, 600.0),
-            theme: Theme::default(),
-            scratch: Frame::new(),
-        }
-    }
-}
 
 #[allow(clippy::cast_possible_truncation)]
 fn f(v: f64) -> f32 {
