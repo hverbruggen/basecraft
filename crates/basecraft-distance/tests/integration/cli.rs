@@ -309,6 +309,9 @@ fn python_plugin_retention_contract_with_native_engine() {
     let output = Command::new(python)
         .current_dir(&repo)
         .env("PYTHONPATH", repo.join("python/src"))
+        // Bytecode written into plugins/distance changes the bundled package's
+        // digest, so tests running beside this one would see plugin_changed.
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .env(
             "BASECRAFT_DISTANCE",
             env!("CARGO_BIN_EXE_basecraft-distance"),
