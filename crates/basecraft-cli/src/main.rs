@@ -65,10 +65,22 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         .into_iter()
         .filter(|command| command.routes != Routes::LiveSession)
         .collect();
-    let matches = cli(&table).get_matches();
-    let globals = Globals::from_arg_matches(&matches)?;
-    let (mut name, mut matches) = matches.subcommand().ok_or("give a command")?;
+    let root = cli(&table).get_matches();
+    let globals = Globals::from_arg_matches(&root)?;
+    let (mut name, mut matches) = root.subcommand().ok_or("give a command")?;
     if name == "mcp" {
+        // The server's project is its argument, and its client decides saves.
+        let given = [
+            "project",
+            "acknowledge_incomplete_evidence",
+            "save_known_policy",
+        ]
+        .into_iter()
+        .chain(["drop_newer_fields"])
+        .find(|id| matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine));
+        if let Some(id) = given {
+            return Err(format!("mcp does not take --{}", id.replace('_', "-")).into());
+        }
         let args = McpArgs::from_arg_matches(matches)?;
         mcp::serve(
             &args.root,

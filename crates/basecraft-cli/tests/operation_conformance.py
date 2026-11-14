@@ -692,7 +692,7 @@ def main():
     def run_request(path, value):
         path.write_text(json.dumps(value))
         outcome, _ = cli("operations", "run", value["operation"], "--project", str(project),
-                         "--request", str(path))
+                         "--request", str(path), "--json")
         return outcome
 
     def python_error(**arguments):
@@ -705,7 +705,7 @@ def main():
     try:
         _, warning = cli("plugins", "install", str(package))
         assert "user account" in warning and "responsib" in warning
-        listing, _ = cli("operations", "list")
+        listing, _ = cli("operations", "list", "--json")
         assert any(item["operation"] == op and item["enabled"] for item in listing["operations"])
         assert operations.describe(op)["descriptor"]["result"]["required"] == ["bytes"]
         assert not sentinel.exists(), "discovery executed entry script"
@@ -714,7 +714,7 @@ def main():
         request_path = root / "request.json"
         request_path.write_text(json.dumps(request("cli.json")))
         outcome, _ = cli("operations", "run", op, "--project", str(project),
-                         "--request", str(request_path))
+                         "--request", str(request_path), "--json")
         expected = check_result(outcome, "cli.json")
         routes = {"cli": (outcome, cli("provenance", "inspect", str(project / "cli.json"))[0])}
         with operations.submit(op, project=project, inputs=request("python.json")["inputs"],
@@ -739,7 +739,7 @@ def main():
         try:
             tools = mcp.tools()
             # Discovery: the permitted CLI set and its schemas/pins are what MCP lists.
-            listing, _ = cli("operations", "list")
+            listing, _ = cli("operations", "list", "--json")
             listed = {mcp_name(item["operation"]): item for item in listing["operations"]
                       if item["enabled"]}
             generated = {tool["name"]: tool for tool in tools if "basecraft" in tool.get("_meta", {})}
@@ -856,7 +856,7 @@ def main():
             assert operations.describe(second_op)["operation"] == second_op
             request_path.write_text(json.dumps(request("second-cli.json", operation=second_op)))
             second_cli, _ = cli("operations", "run", second_op, "--project", str(project),
-                                "--request", str(request_path))
+                                "--request", str(request_path), "--json")
             check_result(second_cli, "second-cli.json")
             second_python = operations.run(second_op, project=project,
                 inputs=request("second-python.json")["inputs"], parameters={"mode":"normal"},
@@ -961,7 +961,7 @@ def main():
         assert not disabled["enabled"]
         request_path.write_text(json.dumps(request("disabled.json")))
         denied, _ = cli("operations", "run", op, "--project", str(project),
-                        "--request", str(request_path))
+                        "--request", str(request_path), "--json")
         assert denied["state"] == "failed" and not (project / "disabled.json").exists()
         assert denied["errors"][0]["code"] == "plugin_disabled", denied
         disabled_request = request("disabled.json")
@@ -1007,11 +1007,12 @@ def main():
         from basecraft.session import Session as PythonSession
         with PythonSession(projects["python"], writes=True, command=str(binary)) as py:
             doc = py.open_metadata(create=True)["document"]
-            first = py.plan_header_import("rbcL.fasta", "|", fields)
+            first = py.plan_header_import(doc, "rbcL.fasta", "|", fields)
             py.apply_metadata(doc, first["changes"])
-            second = py.plan_sheet_import("sheet.csv", apply=True)
+            second = py.plan_sheet_import(doc, "sheet.csv")
+            py.apply_metadata(doc, second["changes"])
             py.save(doc)
-            insdc = py.metadata_insdc("HV1")
+            insdc = py.insdc_source(doc, "HV1")
             plans["python"] = (first, second)
         assert insdc["qualifiers"]["geo_loc_name"] == "Australia", insdc
         assert insdc["qualifiers"]["collection_date"] == "2019-05", insdc
@@ -1071,12 +1072,12 @@ def main():
                 with PythonSession(project, writes=True, command=str(binary)) as py:
                     meta = py.open_metadata()["document"]
                     for request in (record_links, link_request, promote):
-                        plan = py.metadata_consumer(request)
+                        plan = py.metadata_consumer(meta, request)
                         target = meta if request != link_request else py.open(plan["target"])["document"]
                         py.apply(target, py.state(target)["version"], plan["operation"])
                         py.save(target)
-                    partition = py.metadata_consumer({"action": "partitions"})
-                    label_result = py.metadata_consumer(labels)
+                    partition = py.metadata_consumer(meta, {"action": "partitions"})
+                    label_result = py.metadata_consumer(meta, labels)
             else:
                 connection = Mcp(binary, project, env)
                 try:

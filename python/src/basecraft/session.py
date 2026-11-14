@@ -455,22 +455,32 @@ class Session:
         """Open the project's specimen metadata document; ``create`` writes empty tables first."""
         return self.call("metadata_open", {"create": bool(create)})
 
-    def plan_header_import(self, fasta, separator, fields, *, create_specimens=True,
-                           overwrite=False, apply=False):
-        """Plan an import from structured FASTA headers; ``apply`` applies it.
+    def _metadata(self, document):
+        """Refuse unless ``document`` is the project's metadata document."""
+        if self.state(document)["kind"] != "metadata":
+            raise _failure("wrong_document_kind", f"Document {document} is not the project metadata")
 
-        ``fields`` lists each header field's role: ``"specimen"``, ``"taxon"``,
-        ``"record"``, ``"ignore"`` or a column name such as ``"eventDate"``.
+    def plan_header_import(self, document, fasta, separator, fields, *, name="Python",
+                           create_specimens=True, overwrite=False):
+        """Plan an import from structured FASTA headers without applying it.
+
+        ``document`` is the open metadata document. ``fields`` lists each header
+        field's role: ``"specimen"``, ``"taxon"``, ``"record"``, ``"ignore"`` or a
+        column name such as ``"eventDate"``. ``name`` names the pattern as the
+        import settings do; the plan does not depend on it.
         """
+        del name
+        self._metadata(document)
         return self.call("metadata_import_headers", {
             "path": str(fasta), "separator": separator, "fields": list(fields),
-            "no_new_specimens": not create_specimens, "overwrite": overwrite, "apply": apply})
+            "no_new_specimens": not create_specimens, "overwrite": overwrite})
 
-    def plan_sheet_import(self, path, *, mapping=None, fasta=None, create_specimens=True,
-                          overwrite=False, apply=False):
+    def plan_sheet_import(self, document, path, *, mapping=None, fasta=None,
+                          create_specimens=True, overwrite=False):
         """Plan a spreadsheet import; ``mapping`` maps headers to roles as in headers."""
+        self._metadata(document)
         arguments = {"path": str(path), "no_new_specimens": not create_specimens,
-                     "overwrite": overwrite, "apply": apply}
+                     "overwrite": overwrite}
         if mapping is not None:
             arguments["map"] = [f"{header}={role}" for header, role in mapping.items()]
         if fasta is not None:
@@ -482,6 +492,18 @@ class Session:
         version = self.state(document)["version"]
         return self.apply(document, version, {"op": "metadata.edit", "params": {
             "edit": {"action": "apply", "changes": changes}}})
+
+    def metadata_consumer(self, document, request):
+        """Inspect partitions or labels, or plan links or promotion; apply the returned
+        typed operation to its target at its current version, then save.
+        ``document`` is the open metadata document."""
+        self._metadata(document)
+        return self.call("metadata_consumer", {"request": request})
+
+    def insdc_source(self, document, specimen):
+        """INSDC source qualifiers derived for a specimen of the metadata ``document``."""
+        self._metadata(document)
+        return self.call("metadata_insdc", {"specimen": specimen})
 
     # GenBank marker submissions
 

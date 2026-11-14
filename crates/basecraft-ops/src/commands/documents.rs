@@ -51,7 +51,8 @@ pub(super) const COMMANDS: &[Command] = &[
             arg("reverse", Flag, "Reverse-complement the extract."),
             arg("record", Text, "Check that this is the open (first) record of a file of several. \
                     Other records can't be extracted yet.").optional(),
-            arg("version", Number, "Refuse unless the document is still at this version.").optional()] },
+            arg("version", Number, "Refuse unless the document is still at this version; a live \
+                    session must give it.").optional()] },
     Command { name: "import-support", writes: true, routes: All, run: import_support,
         help: "Add the support values of another tree file to a tree as one undoable edit. The \
                 source is recorded as a referenced input, not copied.",
@@ -79,7 +80,8 @@ pub(super) const COMMANDS: &[Command] = &[
                 species, accession, column:NAME.")] },
     Command { name: "number-duplicates", writes: true, routes: All, run: number_duplicates,
         help: "Number duplicate record, row or tip names: `a`, `a` become `a.1`, `a.2`. An \
-                alignment or tree is renamed as one undoable edit. The records of another FASTA or \
+                alignment or tree is renamed as one edit in its history, which a live session can \
+                undo. The records of another FASTA or \
                 GenBank file are renamed in the file itself, which must not be open; that change \
                 cannot be undone and is not in the file's history. Links that named a duplicated \
                 name are listed for relinking.",
@@ -203,11 +205,14 @@ fn save_check(call: &mut Call) -> Result<Value> {
 fn extract(call: &mut Call) -> Result<Value> {
     let doc = call.doc("document")?;
     let revision = call.session.revision(doc)?;
-    if call
-        .optional_number("version")?
-        .is_some_and(|version| version != revision)
-    {
-        return Err(Error::StaleRevision { id: doc, revision });
+    // In a live session the document can change between calls, so the client
+    // names the version it inspected; a command-line run opens it fresh.
+    match call.optional_number("version")? {
+        None if call.is_live() => return Err(Error::MissingArgument("version")),
+        Some(version) if version != revision => {
+            return Err(Error::StaleRevision { id: doc, revision });
+        }
+        _ => {}
     }
     let output = call.path("output")?;
     if output.try_exists()? {
@@ -272,12 +277,17 @@ fn tree_labels(call: &mut Call) -> Result<Value> {
 
 /// D29: number duplicate names, as the window offers when it finds them.
 fn number_duplicates(call: &mut Call) -> Result<Value> {
-    use crate::files::Format;
+    use crate::files::Kind;
     let path = call.path("path")?;
+    // An alignment or tree is numbered as one edit, recorded in its history
+    // like every other edit; only other record files are renamed on disk.
     let doc = match super::open_at(call.session, &path)? {
         Some(doc) if call.session.is_alignment(doc) || call.session.is_tree(doc) => Some(doc),
-        None if Format::from_path(&path)? == Format::Tree => Some(call.open(&path)?),
-        _ => None,
+        Some(_) => None,
+        None => match crate::files::kind(&path)? {
+            Kind::Alignment | Kind::Tree => Some(call.open(&path)?),
+            _ => None,
+        },
     };
     let Some(doc) = doc else {
         let found = renames::duplicate_records(call.session, &path)?.unwrap_or_default();

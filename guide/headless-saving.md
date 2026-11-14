@@ -77,7 +77,7 @@ These options apply to every save a command makes: direct edit, new-sequence,
 import-support, Sanger reviews, metadata and submission editing, and `plugin`.
 They do not waive checks inside recovery, extraction or registered operations.
 
-`basecraft save-check gene.fasta [--output new.fasta]` prints an advisory JSON
+`basecraft save-check gene.fasta [--path new.fasta]` prints an advisory JSON
 check without saving. Its token expires when that process exits and cannot
 authorize another command. Review the issue locations and reasons before an
 explicit one-invocation decision.

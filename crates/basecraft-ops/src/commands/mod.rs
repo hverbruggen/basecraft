@@ -297,7 +297,8 @@ impl<'a> Call<'a> {
     /// file afterwards if it changed. Document arguments and files the command
     /// opens through [`Self::open`] are included already. A document a shared
     /// function edits only to save it elsewhere, such as a combined workspace
-    /// made from its first source, must not be listed.
+    /// made from its first source, must not be listed: the CLI would save it
+    /// over the source (test `table_routes::combine_leaves_its_sources_unchanged`).
     pub fn edits(&mut self, doc: DocId) {
         if !self.edited.contains(&doc) {
             self.edited.push(doc);
@@ -325,6 +326,11 @@ impl<'a> Call<'a> {
     /// found problems. The command line exits with a failure status.
     pub fn fail(&mut self) {
         self.failed = true;
+    }
+
+    /// Whether this run is in a live session (MCP, Python), not the command line.
+    pub fn is_live(&self) -> bool {
+        self.live
     }
 
     pub fn failed(&self) -> bool {

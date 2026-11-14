@@ -291,9 +291,15 @@ fn config() -> Result<RegistryConfig> {
 
 fn plugins_list(_: &mut Call) -> Result<Value> {
     let registry = Registry::load(&config()?)?;
-    let packages: Vec<_> = registry.packages.values().map(|p| json!({"id":p.manifest.id,"version":p.manifest.version,
-        "schema":p.manifest.schema,"enabled":p.enabled,"origin":p.origin,"digest":p.digest,"runtime":" \
-                unverified"})).collect();
+    let packages: Vec<_> = registry
+        .packages
+        .values()
+        .map(|p| {
+            json!({"id": p.manifest.id, "version": p.manifest.version, "schema": p.manifest.schema,
+                "enabled": p.enabled, "origin": p.origin, "digest": p.digest,
+                "runtime": "unverified"})
+        })
+        .collect();
     Ok(
         json!({"generation":registry.generation,"packages":packages,"diagnostics":registry.diagnostics}),
     )

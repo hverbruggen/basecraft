@@ -472,6 +472,15 @@ fn sequence_extraction_cli_mcp_and_python_share_source_and_mapping_semantics() {
     args["version"] = json!(999);
     assert_eq!(mcp.tool("extract", &args)["isError"], true);
     assert!(!project.join("stale.gb").exists());
+    // A live session names the version it inspected.
+    let mut unversioned = args.clone();
+    unversioned.as_object_mut().unwrap().remove("version");
+    let refused = mcp.tool("extract", &unversioned);
+    assert_eq!(
+        refused["structuredContent"]["errors"][0]["code"],
+        "invalid_arguments"
+    );
+    assert!(!project.join("stale.gb").exists());
     mcp.close();
     let mut readonly = Mcp::start(&project, &profile, false);
     let opened = readonly.tool("open", &json!({"path":"gene.fasta"}));

@@ -106,6 +106,17 @@ fn a_read_is_reviewed_decided_and_exported_from_the_command_line() {
             .unwrap()
             .starts_with(">HV1")
     );
+    // As in the window, the export is an edit of the review, saved with it.
+    let saved = basecraft_ops::records::inspect(&review, None).unwrap();
+    assert!(
+        saved.events.iter().any(|event| matches!(
+            &event.op,
+            basecraft_protocol::Op::SangerReview { edit, .. }
+                if matches!(**edit, basecraft_protocol::sanger::ReviewOp::Export { .. })
+        )),
+        "{:?}",
+        saved.events
+    );
 
     // The consensus joins an alignment once, as a new last row.
     let alignment = folder.join("alignment.fasta");
