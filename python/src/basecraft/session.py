@@ -4,8 +4,9 @@
 that external assistants use: the commands of basecraft's one command table
 (the same as the CLI's), installed operations and their owned jobs. Every
 command is a method named like its tool: ``session.tree_reroot(doc,
-outgroup=["a"])``. It never attaches to a running GUI and does not see unsaved
-GUI edits.
+outgroup=["a"])``. Positional arguments of those follow the order the host lists
+under each tool's ``_meta``; the methods written out below keep their own. It
+never attaches to a running GUI and does not see unsaved GUI edits.
 
 Schemas, defaults, permissions, execution and provenance belong to the host.
 This module only frames requests and maps structured errors to OperationError.
@@ -309,7 +310,8 @@ class Session:
 
         def command(*args, **kwargs):
             if len(args) > len(order):
-                raise TypeError(f"{name} takes at most {len(order)} positional arguments")
+                raise TypeError(f"{name} takes at most {len(order)} positional arguments; "
+                                "name the others")
             arguments = dict(zip(order, args))
             if twice := arguments.keys() & kwargs.keys():
                 raise TypeError(f"{name} got {', '.join(sorted(twice))} twice")
@@ -345,6 +347,45 @@ class Session:
     def open(self, path):
         """Open a project document. Returns its state, including the document ID."""
         return self.call("open", {"path": str(path)})
+
+    def documents(self):
+        return self.call("documents")
+
+    def state(self, document):
+        return self.call("state", {"document": document})
+
+    def read(self, document, start=None, end=None, row=None):
+        """Read residues ``start..end`` (row for alignments), tree tips/style (including saved label evidence) or a delimitation."""
+        arguments = {"document": document}
+        for key, value in (("start", start), ("end", end), ("row", row)):
+            if value is not None:
+                arguments[key] = value
+        return self.call("read", arguments)
+
+    def apply(self, document, version, operation):
+        """Apply one typed edit to the version you inspected; logged and undoable."""
+        return self.call("apply", {"document": document, "version": version,
+                                   "operation": operation})
+
+    def undo(self, document):
+        return self.call("undo", {"document": document})
+
+    def redo(self, document):
+        return self.call("redo", {"document": document})
+
+    def document_record(self, document):
+        """History and methods for this session's current revision, including unsaved edits."""
+        return self.call("document_record", {"document": document})
+
+    def import_support(self, document, path, name=""):
+        """Add the support values of another project tree file to an open tree.
+
+        One undoable edit; the source is recorded as a referenced input. An empty
+        name keeps the source's set names. Returns the tree state with ``added``
+        and ``matched``.
+        """
+        return self.call("import_support", {"document": document, "path": str(path),
+                                            "name": name})
 
     def delimitation_linked_alignment(self, document):
         """Return the live workspace's unverified hint (str or None, keeping "").
@@ -420,6 +461,34 @@ class Session:
         """Start a review of a Sanger read (.ab1) from its instrument calls,
         saved as the new review file ``output``. Returns its state."""
         return self.call("sanger_review", {"read": str(read), "output": str(output)})
+
+    def sanger_decide(self, document, columns, choice):
+        """Decide draft columns (from 1: "12", "12,15", "12-14"): accept,
+        reject, pending, or the base to put there."""
+        return self.call("sanger_decide", {"document": document, "columns": str(columns),
+                                           "choice": str(choice)})
+
+    def sanger_export(self, document, output, label):
+        """Export the decided consensus as FASTA under ``label``."""
+        return self.call("sanger_export", {"document": document, "output": str(output),
+                                           "label": str(label)})
+
+    def tree_labels(self, document, fields):
+        """Label an open tree's tips from the specimen table, by ``fields`` in order."""
+        return self.call("tree_labels", {"document": document, "fields": [str(f) for f in fields]})
+
+    def delimitation_figures(self, document, output):
+        """Write the workspace's comparison figures (all, then one per hypothesis) to ``output``."""
+        return self.call("delimitation_figures", {"document": document, "output": str(output)})
+
+    def delimitation_display_tree(self, document, tree):
+        """Attach the tree file ``tree`` as an open species workspace's display tree."""
+        return self.call("delimitation_display_tree", {"document": document, "tree": str(tree)})
+
+    def sanger_add(self, document, alignment, label):
+        """Add the decided consensus to an open alignment as a new row ``label``."""
+        return self.call("sanger_add", {"document": document, "alignment": alignment,
+                                        "label": str(label)})
 
     def extract(self, document, path, start, end, *, version, segments=(), reverse=False,
                 record=None):
@@ -560,6 +629,10 @@ class Session:
     def apply_submission_inclusion(self, document, plan):
         """Apply a complete preview as one undo step; reject stale/changed inputs."""
         return self.edit_submission(document, {"action": "apply_inclusion", "plan": plan})
+
+    def submission_inclusion_presets(self, save=None):
+        """Read named project rules; optionally save a rule in the shared import settings."""
+        return self.call("submission_inclusion_presets", {"save": save} if save is not None else {})
 
     def export_submission(self, document, output):
         """Write the submission package to ``output`` inside the project."""
