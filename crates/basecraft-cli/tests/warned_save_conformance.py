@@ -132,7 +132,7 @@ with Session(root, writes=True) as session:
     refuses(lambda: session.save(doc, "new.fasta", decision=decision(check)), "invalid_arguments")
     refuses(lambda: session.save_check(doc, "../outside.fasta"), "invalid_arguments")
     check = session.save_check(doc)
-    for choice in [None, {}, {**decision(check), "acknowledge_incomplete": "true"},
+    for choice in [{}, {**decision(check), "acknowledge_incomplete": "true"},
                    {**decision(check), "known_policy": "anything"}, {**decision(check), "extra": True}]:
         refuses(lambda: session.call("save", {"document": doc, "decision": choice}), "invalid_arguments")
     # Foreign session cannot use or consume this live Session's token.

@@ -105,7 +105,7 @@ fn plugin_command_runs_registered_sequence_operations() {
     assert_eq!(std::fs::read(&other).unwrap(), b">other\nTCGT\n");
     // The run's own input is the document it edits, so saving the proposals
     // needs no evidence decision.
-    let saved = call(&["end=4", "--save"]);
+    let saved = call(&["end=4"]);
     assert!(
         saved.status.success(),
         "{}\n{}",
@@ -159,8 +159,8 @@ fn plugin_command_runs_registered_sequence_operations() {
     assert_eq!(std::fs::read(&sequence).unwrap(), b">sequence\nACGTACGT\n");
 }
 
-/// A file another analysis read still guards saves; `--input-conflict` passes
-/// the same decision the application asks the user for.
+/// A file another analysis read still guards saves; `--save-known-policy`
+/// passes the same decision the application asks the user for.
 #[test]
 fn plugin_save_honours_the_input_conflict_decision() {
     let temp = tempfile::tempdir().unwrap();
@@ -232,31 +232,20 @@ fn plugin_save_honours_the_input_conflict_decision() {
             sequence.to_str().unwrap(),
             "annotate",
             "end=4",
-            "--save",
         ];
         args.extend_from_slice(extra);
         basecraft(&args)
     };
     // Default and explicit cancel refuse, naming the conflict; nothing is saved.
-    for extra in [&[][..], &["--input-conflict", "cancel"][..]] {
+    for extra in [&[][..], &["--save-known-policy", "cancel"][..]] {
         let error = failure(&plugin(extra));
         assert!(error.contains("analysis_input_conflict"), "{error}");
         assert!(!project.join("sequence.gff3").exists());
     }
-    let error = failure(&plugin(&["--input-conflict", "keep"]));
+    let error = failure(&plugin(&["--save-known-policy", "keep"]));
     assert!(error.contains("preserve_copy"), "{error}");
-    // --input-conflict needs --save.
-    let error = failure(&basecraft(&[
-        "plugin",
-        package.to_str().unwrap(),
-        sequence.to_str().unwrap(),
-        "annotate",
-        "--input-conflict",
-        "cancel",
-    ]));
-    assert!(error.contains("--save"), "{error}");
     // Preserving a copy keeps the earlier analysis verifiable and saves.
-    ok(plugin(&["--input-conflict", "preserve_copy"]));
+    ok(plugin(&["--save-known-policy", "preserve_copy"]));
     assert!(project.join("sequence.gff3").exists());
     ok(basecraft(&[
         "provenance",

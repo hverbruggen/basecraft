@@ -543,6 +543,13 @@ impl Session {
         id.0 < self.docs.len()
     }
 
+    /// Whether `id` has edits its own file lacks. A new document has no file
+    /// of its own until it is saved to one, so it has none.
+    pub fn needs_save(&self, id: DocId) -> Result<bool> {
+        let slot = self.slot(id)?;
+        Ok(slot.saved_at.is_some() && !slot.is_clean())
+    }
+
     pub fn generation(&self, id: DocId) -> Result<u64> {
         Ok(self.slot(id)?.generation)
     }

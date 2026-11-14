@@ -575,7 +575,9 @@ fn tree_mcp_routes_share_hidden_storage() {
         verified_mcp["result"]["structuredContent"],
         json!({"verified":true,"issues":[]})
     );
-    assert!(cli(&["provenance", "verify", nj.to_str().unwrap()]).starts_with("done"));
+    let verified: Value =
+        serde_json::from_str(&cli(&["provenance", "verify", nj.to_str().unwrap()])).unwrap();
+    assert_eq!(verified, json!({"verified":true,"issues":[]}));
     assert!(replayed["result"]["structuredContent"]["problems"].is_array());
     let mut visible: Vec<_> = std::fs::read_dir(&root)
         .unwrap()
@@ -719,8 +721,6 @@ fn metadata_tools_respect_write_permission_and_plan_before_applying() {
         .unwrap();
     assert!(text.contains("permission_denied"), "{text}");
     assert!(!d.path().join("metadata").exists());
-    let pattern =
-        json!({"name":"p","separator":"|","fields":[{"role":"specimen"},{"role":"taxon"}]});
     let replies = session(
         d.path(),
         true,
@@ -728,14 +728,14 @@ fn metadata_tools_respect_write_permission_and_plan_before_applying() {
             request(1, "metadata_open", json!({"create":true})),
             request(
                 2,
-                "metadata_plan_headers",
-                json!({"document":0,"request":{"document":"rbcL.fasta","pattern":pattern}}),
+                "metadata_import_headers",
+                json!({"path":"rbcL.fasta","separator":"|","fields":["specimen","taxon"]}),
             ),
             request(3, "read", json!({"document":0})),
             request(
                 4,
-                "metadata_plan_headers",
-                json!({"document":0,"request":{"document":"../outside.fasta","pattern":pattern}}),
+                "metadata_import_headers",
+                json!({"path":"../outside.fasta","separator":"|","fields":["specimen","taxon"]}),
             ),
         ],
     );
@@ -763,7 +763,7 @@ fn submission_tools_respect_write_permission_and_edit_through_apply() {
         &[
             request(
                 1,
-                "submission_create",
+                "submission_new",
                 json!({"path":"its.submission.json","alignment":"its.afa"}),
             ),
             request(2, "submission_submitter", json!({"set":{"city":"Hobart"}})),
@@ -782,7 +782,7 @@ fn submission_tools_respect_write_permission_and_edit_through_apply() {
         &[
             request(
                 1,
-                "submission_create",
+                "submission_new",
                 json!({"path":"its.submission.json","alignment":"its.afa"}),
             ),
             request(
@@ -830,7 +830,7 @@ fn submission_selection_confirmation_is_shared_by_mcp_export_and_apply() {
         &[
             request(
                 1,
-                "submission_create",
+                "submission_new",
                 json!({"path":"a.submission.json", "alignment":"a.afa"}),
             ),
             request(2, "submission_review", json!({"document":0})),
@@ -896,11 +896,7 @@ fn wrong_kind_requests_fail_without_mutation_and_the_server_remains_usable() {
         json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"checked-access","version":"1"}}}),
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
         request(1, "open", json!({"path":"input.afa"})),
-        request(
-            2,
-            "metadata_status",
-            json!({"document":0,"file":"input.afa"}),
-        ),
+        request(2, "submission_review", json!({"document":0})),
         request(
             3,
             "import_support",

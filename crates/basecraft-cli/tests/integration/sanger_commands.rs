@@ -124,7 +124,7 @@ fn a_read_is_reviewed_decided_and_exported_from_the_command_line() {
             ],
         )
     };
-    assert_eq!(json(&add("HV1"))["rows"], 3);
+    assert_eq!(json(&add("HV1"))["state"]["rows"], 3);
     let saved = std::fs::read_to_string(&alignment).unwrap();
     assert!(saved.contains(">HV1"), "{saved}");
     let twice = add("HV1");

@@ -217,7 +217,6 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
             "find_orfs",
             "min_codons=100",
             "genetic_code=11",
-            "--save",
         ])
         .output()
         .unwrap();
@@ -310,7 +309,6 @@ fn schema_one_plugin_call_is_rejected_without_execution_or_mutation() {
             file.to_str().unwrap(),
             "noop",
             "end=4",
-            "--save",
         ])
         .output()
         .unwrap();

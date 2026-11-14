@@ -239,7 +239,7 @@ def main():
             str(reads / "cli-alignment.fasta"), "--label", "HV1")
         client = Mcp(binary, project, env)
         try:
-            created = client.tool("sanger_review_create", {"read": "reads/forward.ab1",
+            created = client.tool("sanger_review", {"read": "reads/forward.ab1",
                                   "output": "reads/mcp.sanger-review.json"})
             assert not created["isError"], created
             document = created["structuredContent"]["document"]
@@ -692,7 +692,7 @@ def main():
     def run_request(path, value):
         path.write_text(json.dumps(value))
         outcome, _ = cli("operations", "run", value["operation"], "--project", str(project),
-                         "--request", str(path), "--json")
+                         "--request", str(path))
         return outcome
 
     def python_error(**arguments):
@@ -705,7 +705,7 @@ def main():
     try:
         _, warning = cli("plugins", "install", str(package))
         assert "user account" in warning and "responsib" in warning
-        listing, _ = cli("operations", "list", "--json")
+        listing, _ = cli("operations", "list")
         assert any(item["operation"] == op and item["enabled"] for item in listing["operations"])
         assert operations.describe(op)["descriptor"]["result"]["required"] == ["bytes"]
         assert not sentinel.exists(), "discovery executed entry script"
@@ -714,7 +714,7 @@ def main():
         request_path = root / "request.json"
         request_path.write_text(json.dumps(request("cli.json")))
         outcome, _ = cli("operations", "run", op, "--project", str(project),
-                         "--request", str(request_path), "--json")
+                         "--request", str(request_path))
         expected = check_result(outcome, "cli.json")
         routes = {"cli": (outcome, cli("provenance", "inspect", str(project / "cli.json"))[0])}
         with operations.submit(op, project=project, inputs=request("python.json")["inputs"],
@@ -739,7 +739,7 @@ def main():
         try:
             tools = mcp.tools()
             # Discovery: the permitted CLI set and its schemas/pins are what MCP lists.
-            listing, _ = cli("operations", "list", "--json")
+            listing, _ = cli("operations", "list")
             listed = {mcp_name(item["operation"]): item for item in listing["operations"]
                       if item["enabled"]}
             generated = {tool["name"]: tool for tool in tools if "basecraft" in tool.get("_meta", {})}
@@ -856,7 +856,7 @@ def main():
             assert operations.describe(second_op)["operation"] == second_op
             request_path.write_text(json.dumps(request("second-cli.json", operation=second_op)))
             second_cli, _ = cli("operations", "run", second_op, "--project", str(project),
-                                "--request", str(request_path), "--json")
+                                "--request", str(request_path))
             check_result(second_cli, "second-cli.json")
             second_python = operations.run(second_op, project=project,
                 inputs=request("second-python.json")["inputs"], parameters={"mode":"normal"},
@@ -961,7 +961,7 @@ def main():
         assert not disabled["enabled"]
         request_path.write_text(json.dumps(request("disabled.json")))
         denied, _ = cli("operations", "run", op, "--project", str(project),
-                        "--request", str(request_path), "--json")
+                        "--request", str(request_path))
         assert denied["state"] == "failed" and not (project / "disabled.json").exists()
         assert denied["errors"][0]["code"] == "plugin_disabled", denied
         disabled_request = request("disabled.json")
@@ -995,20 +995,11 @@ def main():
         try:
             opened = mcp_meta.tool("metadata_open", {"create": True})["structuredContent"]
             doc = opened["document"]
-            pattern = {"name": "CLI", "separator": "|", "fields": [
-                {"role": "specimen"}, {"role": "taxon"}, {"role": "column", "column": "eventDate"}]}
-            first = mcp_meta.tool("metadata_plan_headers", {"document": doc, "request": {
-                "document": "rbcL.fasta", "pattern": pattern}})["structuredContent"]
-            state = mcp_meta.tool("state", {"document": doc})["structuredContent"]
-            mcp_meta.tool("apply", {"document": doc, "version": state["version"], "operation": {
-                "op": "metadata.edit", "params": {"edit": {"action": "apply",
-                                                           "changes": first["changes"]}}}})
-            second = mcp_meta.tool("metadata_plan_sheet", {"document": doc, "request": {
-                "path": "sheet.csv"}})["structuredContent"]
-            state = mcp_meta.tool("state", {"document": doc})["structuredContent"]
-            mcp_meta.tool("apply", {"document": doc, "version": state["version"], "operation": {
-                "op": "metadata.edit", "params": {"edit": {"action": "apply",
-                                                           "changes": second["changes"]}}}})
+            first = mcp_meta.tool("metadata_import_headers", {
+                "path": "rbcL.fasta", "separator": "|", "fields": fields,
+                "apply": True})["structuredContent"]
+            second = mcp_meta.tool("metadata_import_sheet", {
+                "path": "sheet.csv", "apply": True})["structuredContent"]
             mcp_meta.tool("save", {"document": doc})
             plans["mcp"] = (first, second)
         finally:
@@ -1016,12 +1007,11 @@ def main():
         from basecraft.session import Session as PythonSession
         with PythonSession(projects["python"], writes=True, command=str(binary)) as py:
             doc = py.open_metadata(create=True)["document"]
-            first = py.plan_header_import(doc, "rbcL.fasta", "|", fields)
+            first = py.plan_header_import("rbcL.fasta", "|", fields)
             py.apply_metadata(doc, first["changes"])
-            second = py.plan_sheet_import(doc, "sheet.csv")
-            py.apply_metadata(doc, second["changes"])
+            second = py.plan_sheet_import("sheet.csv", apply=True)
             py.save(doc)
-            insdc = py.insdc_source(doc, "HV1")
+            insdc = py.metadata_insdc("HV1")
             plans["python"] = (first, second)
         assert insdc["qualifiers"]["geo_loc_name"] == "Australia", insdc
         assert insdc["qualifiers"]["collection_date"] == "2019-05", insdc
@@ -1081,24 +1071,24 @@ def main():
                 with PythonSession(project, writes=True, command=str(binary)) as py:
                     meta = py.open_metadata()["document"]
                     for request in (record_links, link_request, promote):
-                        plan = py.metadata_consumer(meta, request)
+                        plan = py.metadata_consumer(request)
                         target = meta if request != link_request else py.open(plan["target"])["document"]
                         py.apply(target, py.state(target)["version"], plan["operation"])
                         py.save(target)
-                    partition = py.metadata_consumer(meta, {"action": "partitions"})
-                    label_result = py.metadata_consumer(meta, labels)
+                    partition = py.metadata_consumer({"action": "partitions"})
+                    label_result = py.metadata_consumer(labels)
             else:
                 connection = Mcp(binary, project, env)
                 try:
                     meta = connection.tool("metadata_open", {})["structuredContent"]["document"]
                     for request in (record_links, link_request, promote):
-                        plan = connection.tool("metadata_consumer", {"document": meta, "request": request})["structuredContent"]
+                        plan = connection.tool("metadata_consumer", {"request": request})["structuredContent"]
                         target = meta if request != link_request else connection.tool("open", {"path": plan["target"]})["structuredContent"]["document"]
                         version = connection.tool("state", {"document": target})["structuredContent"]["version"]
                         connection.tool("apply", {"document": target, "version": version, "operation": plan["operation"]})
                         connection.tool("save", {"document": target})
-                    partition = connection.tool("metadata_consumer", {"document": meta, "request": {"action": "partitions"}})["structuredContent"]
-                    label_result = connection.tool("metadata_consumer", {"document": meta, "request": labels})["structuredContent"]
+                    partition = connection.tool("metadata_consumer", {"request": {"action": "partitions"}})["structuredContent"]
+                    label_result = connection.tool("metadata_consumer", {"request": labels})["structuredContent"]
                 finally:
                     connection.close()
             saved = next(p for p in partition["partitions"] if p["id"] == "project-result")
@@ -1203,7 +1193,7 @@ def main():
                                        "--project", str(cli_project))
             mcp_sub = Mcp(binary, projects["mcp"], sub_env)
             try:
-                created = mcp_sub.tool("submission_create", {"path": "its.submission.json",
+                created = mcp_sub.tool("submission_new", {"path": "its.submission.json",
                                                              "alignment": "ITS.afa"})["structuredContent"]
                 doc = created["document"]
                 assert created["kind"] == "submission", created

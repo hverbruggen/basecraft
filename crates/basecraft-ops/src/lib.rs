@@ -3,6 +3,7 @@
 pub mod access;
 pub mod alignment_add;
 pub mod blast;
+pub mod commands;
 pub mod files;
 pub mod log;
 pub mod metadata;
