@@ -104,7 +104,6 @@ pub(crate) fn freeze_file(source: &Path, destination: &Path) -> Result<String> {
     Ok(hash)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
